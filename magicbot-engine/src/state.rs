@@ -1,5 +1,6 @@
 use crate::ids::{IdMinter, ObjectId, PlayerId};
 use crate::object::{Object, Zone};
+use crate::priority::{PriorityState, StackObject};
 use crate::zones::Zones;
 
 /// The whole game. Cloning this IS the fork — cheap by construction because every
@@ -9,13 +10,13 @@ use crate::zones::Zones;
 pub struct GameState {
     objects: im::HashMap<ObjectId, Object>,
     zones: Zones,
-    #[allow(dead_code)]
-    stack: im::Vector<ObjectId>,
+    stack: im::Vector<StackObject>,
     minter: IdMinter,
     #[allow(dead_code)]
     n_players: usize,
     #[allow(dead_code)]
     rng_seed: u64,
+    priority: PriorityState,
 }
 
 impl GameState {
@@ -27,6 +28,7 @@ impl GameState {
             minter: IdMinter::new(),
             n_players,
             rng_seed,
+            priority: PriorityState::new(PlayerId(0), n_players as u8),
         }
     }
 
@@ -57,6 +59,25 @@ impl GameState {
 
     pub fn battlefield_len(&self) -> usize {
         self.zones.battlefield_len()
+    }
+
+    pub fn priority_holder(&self) -> PlayerId {
+        self.priority.holder()
+    }
+
+    pub fn stack_len(&self) -> usize {
+        self.stack.len()
+    }
+
+    pub fn peek_stack(&self) -> Option<StackObject> {
+        self.stack.last().copied()
+    }
+
+    /// Put an object on top of the stack (CR 405.2 LIFO). The active player then
+    /// receives priority and the pass round restarts (CR 117.3c).
+    pub fn push_stack(&mut self, obj: StackObject) {
+        self.stack.push_back(obj);
+        self.priority.give_to_active();
     }
 
     /// Move an object to another zone. CR 400.7: this mints a NEW object id and
@@ -510,6 +531,34 @@ mod move_tests {
         assert!(s.zone_contains(Zone::Battlefield, PlayerId(0), id));
         let _ev = s.move_object(id, Zone::Graveyard).unwrap();
         assert!(!s.zone_contains(Zone::Battlefield, PlayerId(0), id), "old id gone from source zone");
+    }
+}
+
+#[cfg(test)]
+mod priority_tests {
+    use super::*;
+    use crate::ids::PlayerId;
+    use crate::priority::StackObject;
+
+    #[test]
+    fn new_game_priority_is_active_player_empty_stack() {
+        let s = GameState::new(2, 0);
+        assert_eq!(s.priority_holder(), PlayerId(0));
+        assert_eq!(s.stack_len(), 0);
+        assert!(s.peek_stack().is_none());
+    }
+
+    #[test]
+    fn push_stack_is_lifo_and_gives_active_priority() {
+        let mut s = GameState::new(2, 0);
+        // pretend P1 had priority (simulate a pass) then P1 puts something on stack
+        s.push_stack(StackObject { id: crate::ids::ObjectId(1), controller: PlayerId(0) });
+        s.push_stack(StackObject { id: crate::ids::ObjectId(2), controller: PlayerId(1) });
+        assert_eq!(s.stack_len(), 2);
+        // top is the last pushed (LIFO)
+        assert_eq!(s.peek_stack().unwrap().id, crate::ids::ObjectId(2));
+        // active player (P0) holds priority after a push
+        assert_eq!(s.priority_holder(), PlayerId(0));
     }
 }
 
