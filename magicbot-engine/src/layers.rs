@@ -245,7 +245,7 @@ pub fn compute(
     let mut types = base.types;
     let mut colors = base.colors;
     let mut abilities = base.abilities.clone();
-    let pt = base.pt;
+    let mut pt = base.pt;
 
     // Layer 4: type-changing (OR new types in).
     for ce in effects_in_layer(effects, Layer::Type) {
@@ -272,8 +272,43 @@ pub fn compute(
         }
     }
 
-    // Layer 7 added in a later task.
-    let _ = counters;
+    // Layer 7 (P/T), sublayers in fixed order 7a -> 7b -> 7c -> 7d (CR 613.4).
+    if pt.is_some() {
+        let pt_effects = effects_in_layer(effects, Layer::Pt);
+
+        // 7a: CDA P/T sets (is_cda && SetBasePt), timestamp order.
+        for ce in pt_effects.iter().filter(|e| e.is_cda) {
+            if let Effect::SetBasePt(p) = &ce.effect {
+                pt = Some(*p);
+            }
+        }
+        // 7b: non-CDA sets, timestamp order.
+        for ce in pt_effects.iter().filter(|e| !e.is_cda) {
+            if let Effect::SetBasePt(p) = &ce.effect {
+                pt = Some(*p);
+            }
+        }
+        // 7c: modify effects + counters (CR 613.4c folds counters here).
+        let mut p = pt.unwrap();
+        for ce in pt_effects.iter() {
+            if let Effect::ModifyPt { power, toughness } = &ce.effect {
+                p.power += power;
+                p.toughness += toughness;
+            }
+        }
+        let (cp, ct) = counters.net_pt();
+        p.power += cp;
+        p.toughness += ct;
+        pt = Some(p);
+
+        // 7d: switch P/T, timestamp order (each switch flips).
+        for ce in pt_effects.iter() {
+            if let Effect::SwitchPt = &ce.effect {
+                let cur = pt.unwrap();
+                pt = Some(Pt { power: cur.toughness, toughness: cur.power });
+            }
+        }
+    }
 
     Chars { pt, types, colors, abilities }
 }
@@ -455,5 +490,101 @@ mod layer_4_5_tests {
         let out = compute(&base, &effects, &Counters::new(), Status { tapped: false });
         assert!(out.colors.has(Color::Blue), "later timestamp wins");
         assert!(!out.colors.has(Color::White), "earlier set overwritten");
+    }
+}
+
+#[cfg(test)]
+mod layer_7_tests {
+    use super::*;
+    use crate::ids::Timestamp;
+
+    fn base_3_3() -> BaseChars {
+        BaseChars {
+            pt: Some(Pt { power: 3, toughness: 3 }),
+            types: TypeSet::none().with_creature(),
+            colors: ColorSet::colorless(),
+            abilities: AbilitySet::new(),
+        }
+    }
+
+    #[test]
+    fn set_7b_before_modify_7c_f3() {
+        // CR 613.4b/c: base 3/3, set to 1/1 (7b), +1/+1 counter (7c) -> 2/2,
+        // regardless of timestamp. The set must NOT erase the later counter.
+        let base = base_3_3();
+        let effects = vec![ContinuousEffect {
+            effect: Effect::SetBasePt(Pt { power: 1, toughness: 1 }),
+            timestamp: Timestamp(5), // later than the counter conceptually; must not matter
+            is_cda: false,
+        }];
+        let counters = Counters::new().with_plus1(1);
+        let out = compute(&base, &effects, &counters, Status { tapped: false });
+        assert_eq!(out.pt, Some(Pt { power: 2, toughness: 2 }));
+    }
+
+    #[test]
+    fn modify_7c_stacks_on_base() {
+        // base 3/3, +2/+2 modify, +1/+1 counter -> 6/6.
+        let base = base_3_3();
+        let effects = vec![ContinuousEffect {
+            effect: Effect::ModifyPt { power: 2, toughness: 2 },
+            timestamp: Timestamp(1),
+            is_cda: false,
+        }];
+        let counters = Counters::new().with_plus1(1);
+        let out = compute(&base, &effects, &counters, Status { tapped: false });
+        assert_eq!(out.pt, Some(Pt { power: 6, toughness: 6 }));
+    }
+
+    #[test]
+    fn switch_7d_is_last_f11() {
+        // CR 613.4d: 1/4, +2/+0 (7c) -> 3/4, then switch -> 4/3.
+        let base = BaseChars {
+            pt: Some(Pt { power: 1, toughness: 4 }),
+            types: TypeSet::none().with_creature(),
+            colors: ColorSet::colorless(),
+            abilities: AbilitySet::new(),
+        };
+        let effects = vec![
+            ContinuousEffect {
+                effect: Effect::ModifyPt { power: 2, toughness: 0 },
+                timestamp: Timestamp(1),
+                is_cda: false,
+            },
+            ContinuousEffect {
+                effect: Effect::SwitchPt,
+                timestamp: Timestamp(2),
+                is_cda: false,
+            },
+        ];
+        let out = compute(&base, &effects, &Counters::new(), Status { tapped: false });
+        assert_eq!(out.pt, Some(Pt { power: 4, toughness: 3 }));
+    }
+
+    #[test]
+    fn cda_pt_7a_before_set_7b_f4() {
+        // CR 613.4a/b: a CDA defining P/T applies in 7a, then a non-CDA set in 7b overrides.
+        let base = BaseChars {
+            pt: Some(Pt { power: 0, toughness: 0 }),
+            types: TypeSet::none().with_creature(),
+            colors: ColorSet::colorless(),
+            abilities: AbilitySet::new(),
+        };
+        let effects = vec![
+            // CDA sets 5/5 in 7a
+            ContinuousEffect {
+                effect: Effect::SetBasePt(Pt { power: 5, toughness: 5 }),
+                timestamp: Timestamp(1),
+                is_cda: true,
+            },
+            // non-CDA set 1/1 in 7b overrides the CDA
+            ContinuousEffect {
+                effect: Effect::SetBasePt(Pt { power: 1, toughness: 1 }),
+                timestamp: Timestamp(2),
+                is_cda: false,
+            },
+        ];
+        let out = compute(&base, &effects, &Counters::new(), Status { tapped: false });
+        assert_eq!(out.pt, Some(Pt { power: 1, toughness: 1 }), "7b set overrides 7a CDA");
     }
 }
