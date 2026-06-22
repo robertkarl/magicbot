@@ -8,12 +8,26 @@ use std::collections::HashMap;
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct DefId(pub u64);
 
+/// What a spell does when it resolves (CR 608). Data-derived from the CardDef.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum SpellEffect {
+    /// Becomes a permanent on the battlefield (CR 608.3a). Creature spells.
+    ResolveToBattlefield,
+    /// Marks `amount` damage on the spell's target.
+    DealDamage { amount: u32 },
+    /// No modeled effect.
+    Fizzle,
+}
+
 /// A single data-driven static continuous ability. Expressed as the layer
 /// effect it produces; the layer engine (layers::compute) applies it.
 #[derive(Clone, Debug)]
 pub enum StaticAbility {
     /// "Other creatures you control get +power/+toughness." (Glorious Anthem.)
     AnthemOtherCreatures { power: i32, toughness: i32 },
+    /// Marks a spell that deals `amount` damage to its target on resolution.
+    /// Consulted by `spell_effect`, not by the layer system.
+    SpellDealsDamage { amount: u32 },
 }
 
 /// Printed characteristics of a card, as data. Keyed on `def_id` (oracle_id).
@@ -86,12 +100,27 @@ impl CardDef {
     pub fn static_effects(&self) -> Vec<crate::layers::Effect> {
         self.statics
             .iter()
-            .map(|s| match s {
+            .filter_map(|s| match s {
                 StaticAbility::AnthemOtherCreatures { power, toughness } => {
-                    crate::layers::Effect::ModifyPt { power: *power, toughness: *toughness }
+                    Some(crate::layers::Effect::ModifyPt { power: *power, toughness: *toughness })
                 }
+                StaticAbility::SpellDealsDamage { .. } => None,
             })
             .collect()
+    }
+
+    /// What this card does when cast as a spell and resolved.
+    pub fn spell_effect(&self) -> SpellEffect {
+        for s in &self.statics {
+            if let StaticAbility::SpellDealsDamage { amount } = s {
+                return SpellEffect::DealDamage { amount: *amount };
+            }
+        }
+        if self.is_creature() {
+            SpellEffect::ResolveToBattlefield
+        } else {
+            SpellEffect::Fizzle
+        }
     }
 
     /// The raw static abilities (kind preserved, for affected-set scoping).
@@ -183,6 +212,11 @@ pub fn sample_pool() -> CardDb {
             .with_pt(2, 2)
             .with_static(StaticAbility::AnthemOtherCreatures { power: 1, toughness: 1 }),
     );
+    db.insert(
+        CardDef::new(DefId(7), "Lightning Bolt", 1)
+            .with_colors(ColorSet::colorless().with(Color::Red))
+            .with_static(StaticAbility::SpellDealsDamage { amount: 3 }),
+    );
     db
 }
 
@@ -202,8 +236,8 @@ mod tests {
     #[test]
     fn sample_pool_has_the_expected_cards() {
         let db = sample_pool();
-        // 6 cards: bears, serra, anthem, forest, plains, field marshal
-        assert_eq!(db.len(), 6);
+        // 7 cards: bears, serra, anthem, forest, plains, field marshal, lightning bolt
+        assert_eq!(db.len(), 7);
         // Serra Angel is a 4/4 flyer.
         let serra = db.get(DefId(2)).expect("serra present");
         let base = serra.base_chars();
@@ -291,5 +325,32 @@ mod tests {
             .with_types(TypeSet::none().with_enchantment())
             .with_static(StaticAbility::AnthemOtherCreatures { power: 1, toughness: 1 });
         assert_eq!(anthem.mana_value(), 3);
+    }
+
+    #[test]
+    fn spell_effect_derivation() {
+        // A creature resolves to the battlefield.
+        let bears = CardDef::new(DefId(1), "Grizzly Bears", 2)
+            .with_types(TypeSet::none().with_creature())
+            .with_pt(2, 2);
+        assert_eq!(bears.spell_effect(), SpellEffect::ResolveToBattlefield);
+
+        // A damage spell deals damage.
+        let bolt = CardDef::new(DefId(7), "Lightning Bolt", 1)
+            .with_static(StaticAbility::SpellDealsDamage { amount: 3 });
+        assert_eq!(bolt.spell_effect(), SpellEffect::DealDamage { amount: 3 });
+
+        // A noncreature with no spell marker fizzles (nothing modeled).
+        let anthem = CardDef::new(DefId(3), "Glorious Anthem", 3)
+            .with_types(TypeSet::none().with_enchantment());
+        assert_eq!(anthem.spell_effect(), SpellEffect::Fizzle);
+    }
+
+    #[test]
+    fn sample_pool_includes_lightning_bolt() {
+        let db = sample_pool();
+        assert_eq!(db.len(), 7);
+        let bolt = db.get(DefId(7)).expect("bolt present");
+        assert_eq!(bolt.spell_effect(), SpellEffect::DealDamage { amount: 3 });
     }
 }

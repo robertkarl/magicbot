@@ -9,8 +9,8 @@ use magicbot_engine::state::GameState;
 fn c2_lifo_two_objects_resolve_in_reverse_order() {
     let db = sample_pool();
     let mut s = GameState::new(2, 0);
-    let first = StackObject { id: ObjectId(1), controller: PlayerId(0) };
-    let second = StackObject { id: ObjectId(2), controller: PlayerId(1) };
+    let first = StackObject::new(ObjectId(1), PlayerId(0), 0, None);
+    let second = StackObject::new(ObjectId(2), PlayerId(1), 0, None);
     s.push_stack(first);
     s.push_stack(second); // second is on top
 
@@ -44,7 +44,7 @@ fn sba_fires_during_the_priority_loop() {
 fn priority_loop_on_fork_does_not_disturb_parent() {
     let db = sample_pool();
     let mut parent = GameState::new(2, 0);
-    parent.push_stack(StackObject { id: ObjectId(1), controller: PlayerId(0) });
+    parent.push_stack(StackObject::new(ObjectId(1), PlayerId(0), 0, None));
 
     let mut child = parent.fork();
     let _ = child.pass_priority(&db); // P0 -> P1

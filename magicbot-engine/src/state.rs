@@ -211,11 +211,56 @@ impl GameState {
 
         // CR 608.1 / 405.5: resolve the top of the stack, or end the step.
         if let Some(top) = self.stack.pop_back() {
+            self.resolve_effect(&top, db);
             // A fresh priority round follows the resolution.
             self.priority.reset_passes();
             PriorityOutcome::Resolved(top)
         } else {
             PriorityOutcome::StepEnded
+        }
+    }
+
+    /// Cast a spell: put it on the stack with its target frozen (CR 601.2).
+    /// Mana cost, modes, X, legality checks are deferred. Returns the stack id.
+    pub fn cast(
+        &mut self,
+        def_id: u64,
+        controller: PlayerId,
+        target: Option<ObjectId>,
+    ) -> ObjectId {
+        let id = self.minter.mint();
+        let obj = crate::priority::StackObject::new(id, controller, def_id, target);
+        self.push_stack(obj);
+        id
+    }
+
+    /// Apply a resolving spell's effect (CR 608). Creature -> battlefield
+    /// permanent; damage -> mark damage on the target (SBA handles death).
+    fn resolve_effect(&mut self, obj: &crate::priority::StackObject, db: &crate::carddb::CardDb) {
+        use crate::carddb::{DefId, SpellEffect};
+        let effect = match db.get(DefId(obj.def_id)) {
+            Some(def) => def.spell_effect(),
+            None => return,
+        };
+        match effect {
+            SpellEffect::ResolveToBattlefield => {
+                // CR 608.3a: becomes a permanent entering under the caster's control.
+                let new_id =
+                    self.create_object(obj.controller, crate::object::Zone::Battlefield, obj.def_id);
+                if let Some(o) = self.get_mut(new_id) {
+                    o.set_controller(Some(obj.controller));
+                }
+            }
+            SpellEffect::DealDamage { amount } => {
+                if let Some(target) = obj.target {
+                    if let Some(o) = self.get_mut(target) {
+                        if o.zone() == crate::object::Zone::Battlefield {
+                            o.mark_damage(amount);
+                        }
+                    }
+                }
+            }
+            SpellEffect::Fizzle => {}
         }
     }
 
@@ -275,6 +320,9 @@ impl GameState {
                                 is_cda: false,
                             });
                         }
+                    }
+                    StaticAbility::SpellDealsDamage { .. } => {
+                        // Spell marker; not a continuous ability — no layer effect.
                     }
                 }
             }
@@ -591,8 +639,8 @@ mod priority_tests {
         use crate::priority::PriorityOutcome;
         let db = crate::carddb::sample_pool();
         let mut s = GameState::new(2, 0);
-        let top = StackObject { id: crate::ids::ObjectId(42), controller: PlayerId(1) };
-        s.push_stack(StackObject { id: crate::ids::ObjectId(41), controller: PlayerId(0) });
+        let top = StackObject::new(crate::ids::ObjectId(42), PlayerId(1), 0, None);
+        s.push_stack(StackObject::new(crate::ids::ObjectId(41), PlayerId(0), 0, None));
         s.push_stack(top); // top of stack
         // push gave priority to active (P0). P0 passes -> P1. P1 passes -> full round.
         assert_eq!(s.pass_priority(&db), PriorityOutcome::Passed(PlayerId(1)));
@@ -625,13 +673,59 @@ mod priority_tests {
     fn push_stack_is_lifo_and_gives_active_priority() {
         let mut s = GameState::new(2, 0);
         // pretend P1 had priority (simulate a pass) then P1 puts something on stack
-        s.push_stack(StackObject { id: crate::ids::ObjectId(1), controller: PlayerId(0) });
-        s.push_stack(StackObject { id: crate::ids::ObjectId(2), controller: PlayerId(1) });
+        s.push_stack(StackObject::new(crate::ids::ObjectId(1), PlayerId(0), 0, None));
+        s.push_stack(StackObject::new(crate::ids::ObjectId(2), PlayerId(1), 0, None));
         assert_eq!(s.stack_len(), 2);
         // top is the last pushed (LIFO)
         assert_eq!(s.peek_stack().unwrap().id, crate::ids::ObjectId(2));
         // active player (P0) holds priority after a push
         assert_eq!(s.priority_holder(), PlayerId(0));
+    }
+}
+
+#[cfg(test)]
+mod casting_tests {
+    use super::*;
+    use crate::carddb::sample_pool;
+    use crate::ids::PlayerId;
+    use crate::object::Zone;
+
+    fn resolve_top(s: &mut GameState, db: &crate::carddb::CardDb) {
+        // active player passes, opponent passes -> top resolves
+        let _ = s.pass_priority(db);
+        let _ = s.pass_priority(db);
+    }
+
+    #[test]
+    fn creature_spell_resolves_onto_battlefield() {
+        let db = sample_pool();
+        let mut s = GameState::new(2, 0);
+        // Cast Grizzly Bears (def 1).
+        let _spell = s.cast(1, PlayerId(0), None);
+        assert_eq!(s.stack_len(), 1);
+        resolve_top(&mut s, &db);
+        assert_eq!(s.stack_len(), 0, "spell left the stack");
+        assert_eq!(s.battlefield_len(), 1, "a creature permanent entered");
+    }
+
+    #[test]
+    fn bolt_kills_a_creature_via_damage_then_sba() {
+        let db = sample_pool();
+        let mut s = GameState::new(2, 0);
+        // A Grizzly Bears (2/2) on the battlefield, controlled by P1.
+        let bears = s.create_object(PlayerId(1), Zone::Battlefield, 1);
+        s.get_mut(bears).unwrap().set_controller(Some(PlayerId(1)));
+
+        // P0 casts Lightning Bolt (def 7, 3 damage) at the bears.
+        let _bolt = s.cast(7, PlayerId(0), Some(bears));
+        resolve_top(&mut s, &db);
+
+        // Bolt resolved -> 3 marked damage -> next full round's SBA kills the 2/2.
+        // resolve_top ran one full round (which resolved the bolt). Run another
+        // full round so the SBA check fires on the now-damaged creature.
+        let _ = s.pass_priority(&db);
+        let _ = s.pass_priority(&db);
+        assert_eq!(s.battlefield_len(), 0, "bolted creature died");
     }
 }
 
