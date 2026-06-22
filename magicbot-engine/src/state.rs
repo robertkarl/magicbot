@@ -72,6 +72,22 @@ impl GameState {
         Some(def.base_chars())
     }
 
+    /// Current characteristics of an object, computed fresh (never stored;
+    /// CR 613.5). Composes the printed base, the static effects that apply to
+    /// it, and its counters, through the CR 613 layer engine.
+    pub fn characteristics(
+        &self,
+        id: ObjectId,
+        db: &crate::carddb::CardDb,
+    ) -> Option<crate::layers::Chars> {
+        let base = self.base_chars_of(id, db)?;
+        let effects = self.active_static_effects_for(id, db);
+        let obj = self.objects.get(&id)?;
+        let counters = obj.layer_counters();
+        let status = crate::layers::Status { tapped: obj.is_tapped() };
+        Some(crate::layers::compute(&base, &effects, &counters, status))
+    }
+
     /// Gather the static continuous effects that currently apply to `target`,
     /// scoped per their affected-set. This slice handles AnthemOtherCreatures:
     /// "other creatures you control get +X/+Y". CardDb is passed in.
@@ -195,6 +211,32 @@ mod characteristics_tests {
         // The anthem is an enchantment (not a creature) and is itself — no effect on itself.
         let effects = s.active_static_effects_for(anthem, &db);
         assert_eq!(effects.len(), 0);
+    }
+
+    #[test]
+    fn characteristics_applies_anthem_and_counters() {
+        use crate::layers::Pt;
+        use crate::object::CounterKind;
+
+        let db = sample_pool();
+        let mut s = GameState::new(2, 0);
+        let bears = s.create_object(PlayerId(0), Zone::Battlefield, 1);
+        let anthem = s.create_object(PlayerId(0), Zone::Battlefield, 3);
+        s.get_mut(bears).unwrap().set_controller(Some(PlayerId(0)));
+        s.get_mut(anthem).unwrap().set_controller(Some(PlayerId(0)));
+        // a +1/+1 counter on the bears as well
+        s.get_mut(bears).unwrap().add_counter(CounterKind::PlusOnePlusOne, 1);
+
+        // base 2/2, +1/+1 anthem (7c), +1/+1 counter (7c) -> 4/4
+        let chars = s.characteristics(bears, &db).expect("chars");
+        assert_eq!(chars.pt, Some(Pt { power: 4, toughness: 4 }));
+    }
+
+    #[test]
+    fn characteristics_of_unknown_is_none() {
+        let db = sample_pool();
+        let s = GameState::new(2, 0);
+        assert!(s.characteristics(crate::ids::ObjectId(123), &db).is_none());
     }
 
     #[test]
