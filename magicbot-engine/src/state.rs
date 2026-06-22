@@ -192,6 +192,33 @@ impl GameState {
         events
     }
 
+    /// The current priority holder passes (CR 117). On a full round of passes,
+    /// runs state-based actions (CR 117.5), then either resolves the top of the
+    /// stack (CR 608.1) or ends the step if the stack is empty.
+    pub fn pass_priority(
+        &mut self,
+        db: &crate::carddb::CardDb,
+    ) -> crate::priority::PriorityOutcome {
+        use crate::priority::PriorityOutcome;
+
+        let full_round = self.priority.record_pass();
+        if !full_round {
+            return PriorityOutcome::Passed(self.priority.holder());
+        }
+
+        // CR 117.5: state-based actions are performed before the game proceeds.
+        let _sba_events = self.check_state_based_actions(db);
+
+        // CR 608.1 / 405.5: resolve the top of the stack, or end the step.
+        if let Some(top) = self.stack.pop_back() {
+            // A fresh priority round follows the resolution.
+            self.priority.reset_passes();
+            PriorityOutcome::Resolved(top)
+        } else {
+            PriorityOutcome::StepEnded
+        }
+    }
+
     /// Gather the static continuous effects that currently apply to `target`,
     /// scoped per their affected-set. This slice handles AnthemOtherCreatures:
     /// "other creatures you control get +X/+Y". CardDb is passed in.
@@ -546,6 +573,52 @@ mod priority_tests {
         assert_eq!(s.priority_holder(), PlayerId(0));
         assert_eq!(s.stack_len(), 0);
         assert!(s.peek_stack().is_none());
+    }
+
+    #[test]
+    fn all_pass_empty_stack_ends_step() {
+        use crate::priority::PriorityOutcome;
+        let db = crate::carddb::sample_pool();
+        let mut s = GameState::new(2, 0);
+        // P0 passes (holder -> P1)
+        assert_eq!(s.pass_priority(&db), PriorityOutcome::Passed(PlayerId(1)));
+        // P1 passes -> full round, empty stack -> step ends
+        assert_eq!(s.pass_priority(&db), PriorityOutcome::StepEnded);
+    }
+
+    #[test]
+    fn all_pass_nonempty_stack_resolves_top() {
+        use crate::priority::PriorityOutcome;
+        let db = crate::carddb::sample_pool();
+        let mut s = GameState::new(2, 0);
+        let top = StackObject { id: crate::ids::ObjectId(42), controller: PlayerId(1) };
+        s.push_stack(StackObject { id: crate::ids::ObjectId(41), controller: PlayerId(0) });
+        s.push_stack(top); // top of stack
+        // push gave priority to active (P0). P0 passes -> P1. P1 passes -> full round.
+        assert_eq!(s.pass_priority(&db), PriorityOutcome::Passed(PlayerId(1)));
+        let outcome = s.pass_priority(&db);
+        assert_eq!(outcome, PriorityOutcome::Resolved(top), "LIFO: last pushed resolves first");
+        assert_eq!(s.stack_len(), 1, "one object left on the stack");
+        // after a resolution, the active player gets priority again
+        assert_eq!(s.priority_holder(), PlayerId(0));
+    }
+
+    #[test]
+    fn resolution_runs_sbas_first() {
+        use crate::priority::PriorityOutcome;
+        // A creature with lethal damage on the battlefield should be cleaned up by
+        // the SBA check that runs when all players pass (CR 117.5), even with an
+        // empty stack ending the step.
+        let db = crate::carddb::sample_pool();
+        let mut s = GameState::new(2, 0);
+        let bears = s.create_object(PlayerId(0), Zone::Battlefield, 1);
+        s.get_mut(bears).unwrap().set_controller(Some(PlayerId(0)));
+        s.get_mut(bears).unwrap().mark_damage(2); // lethal
+        // pass the full round; the SBA check fires before the step ends
+        let _ = s.pass_priority(&db); // P0 -> P1
+        let outcome = s.pass_priority(&db); // full round: SBAs run, then empty stack -> StepEnded
+        assert_eq!(outcome, PriorityOutcome::StepEnded);
+        assert_eq!(s.battlefield_len(), 0, "lethal creature cleaned up by SBA in the priority loop");
     }
 
     #[test]

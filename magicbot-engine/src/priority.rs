@@ -60,6 +60,17 @@ impl PriorityState {
     }
 }
 
+/// The result of a player passing priority.
+#[derive(Clone, PartialEq, Debug)]
+pub enum PriorityOutcome {
+    /// Priority advanced to this player; the round is not yet complete.
+    Passed(PlayerId),
+    /// All players passed with a non-empty stack: this object resolved.
+    Resolved(StackObject),
+    /// All players passed with an empty stack: the step/phase ends.
+    StepEnded,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
