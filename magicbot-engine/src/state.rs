@@ -251,6 +251,38 @@ mod characteristics_tests {
         let effects = s.active_static_effects_for(bears, &db);
         assert_eq!(effects.len(), 0);
     }
+
+    #[test]
+    fn anthem_does_not_apply_when_controllers_are_none() {
+        // create_object leaves controller None. Two uncontrolled objects must
+        // NOT satisfy "you control" via None == None — the is_some() guard.
+        let db = sample_pool();
+        let mut s = GameState::new(2, 0);
+        let bears = s.create_object(PlayerId(0), Zone::Battlefield, 1); // creature, controller None
+        let _anthem = s.create_object(PlayerId(0), Zone::Battlefield, 3); // anthem, controller None
+        // deliberately do NOT set_controller on either
+        let effects = s.active_static_effects_for(bears, &db);
+        assert_eq!(effects.len(), 0, "None controllers must not match via None == None");
+    }
+
+    #[test]
+    fn two_anthems_stack_additively() {
+        // Glorious Anthem is DefId(3) (+1/+1). Two of them on a 2/2 creature -> 4/4.
+        let db = sample_pool();
+        let mut s = GameState::new(2, 0);
+        let bears = s.create_object(PlayerId(0), Zone::Battlefield, 1);
+        let a1 = s.create_object(PlayerId(0), Zone::Battlefield, 3);
+        let a2 = s.create_object(PlayerId(0), Zone::Battlefield, 3);
+        s.get_mut(bears).unwrap().set_controller(Some(PlayerId(0)));
+        s.get_mut(a1).unwrap().set_controller(Some(PlayerId(0)));
+        s.get_mut(a2).unwrap().set_controller(Some(PlayerId(0)));
+
+        let effects = s.active_static_effects_for(bears, &db);
+        assert_eq!(effects.len(), 2, "both anthems contribute an effect");
+
+        let chars = s.characteristics(bears, &db).unwrap();
+        assert_eq!(chars.pt, Some(Pt { power: 4, toughness: 4 }), "2/2 + two +1/+1 anthems = 4/4");
+    }
 }
 
 #[cfg(test)]
