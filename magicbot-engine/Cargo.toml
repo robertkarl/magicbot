@@ -14,3 +14,7 @@ criterion = "0.5"
 [[bench]]
 name = "fork_bench"
 harness = false
+
+[[bin]]
+name = "demo"
+path = "src/main.rs"
