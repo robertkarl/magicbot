@@ -123,6 +123,14 @@ impl Object {
     pub fn counter_count(&self, kind: CounterKind) -> i32 {
         self.instance.counters.get(&kind).copied().unwrap_or(0)
     }
+
+    /// Build the layer engine's Counters view from this object's +1/+1 and
+    /// -1/-1 counters (the counters that affect P/T in layer 7c).
+    pub fn layer_counters(&self) -> crate::layers::Counters {
+        crate::layers::Counters::new()
+            .with_plus1(self.counter_count(CounterKind::PlusOnePlusOne))
+            .with_minus1(self.counter_count(CounterKind::MinusOneMinusOne))
+    }
 }
 
 #[cfg(test)]
@@ -155,5 +163,17 @@ mod tests {
         o.add_counter(CounterKind::PlusOnePlusOne, 2);
         o.add_counter(CounterKind::PlusOnePlusOne, 1);
         assert_eq!(o.counter_count(CounterKind::PlusOnePlusOne), 3);
+    }
+
+    #[test]
+    fn layer_counters_reflects_plus_and_minus() {
+        use crate::ids::{IdMinter, PlayerId};
+        let mut m = IdMinter::new();
+        let mut o = Object::new(m.mint(), PlayerId(0), Zone::Battlefield, 1);
+        o.add_counter(CounterKind::PlusOnePlusOne, 3);
+        o.add_counter(CounterKind::MinusOneMinusOne, 1);
+        let c = o.layer_counters();
+        // net +2/+2
+        assert_eq!(c.net_pt(), (2, 2));
     }
 }
