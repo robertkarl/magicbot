@@ -594,8 +594,8 @@ mod priority_tests {
         use crate::priority::PriorityOutcome;
         let db = crate::carddb::sample_pool();
         let mut s = GameState::new(2, 0);
-        let top = StackObject { id: crate::ids::ObjectId(42), controller: PlayerId(1) };
-        s.push_stack(StackObject { id: crate::ids::ObjectId(41), controller: PlayerId(0) });
+        let top = StackObject::new(crate::ids::ObjectId(42), PlayerId(1), 0, None);
+        s.push_stack(StackObject::new(crate::ids::ObjectId(41), PlayerId(0), 0, None));
         s.push_stack(top); // top of stack
         // push gave priority to active (P0). P0 passes -> P1. P1 passes -> full round.
         assert_eq!(s.pass_priority(&db), PriorityOutcome::Passed(PlayerId(1)));
@@ -628,8 +628,8 @@ mod priority_tests {
     fn push_stack_is_lifo_and_gives_active_priority() {
         let mut s = GameState::new(2, 0);
         // pretend P1 had priority (simulate a pass) then P1 puts something on stack
-        s.push_stack(StackObject { id: crate::ids::ObjectId(1), controller: PlayerId(0) });
-        s.push_stack(StackObject { id: crate::ids::ObjectId(2), controller: PlayerId(1) });
+        s.push_stack(StackObject::new(crate::ids::ObjectId(1), PlayerId(0), 0, None));
+        s.push_stack(StackObject::new(crate::ids::ObjectId(2), PlayerId(1), 0, None));
         assert_eq!(s.stack_len(), 2);
         // top is the last pushed (LIFO)
         assert_eq!(s.peek_stack().unwrap().id, crate::ids::ObjectId(2));

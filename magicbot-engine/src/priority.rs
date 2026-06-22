@@ -3,12 +3,21 @@
 
 use crate::ids::{ObjectId, PlayerId};
 
-/// A placeholder resolvable on the stack. Real spell/ability payloads (targets,
-/// modes, X, source) are deferred; id + controller exercises LIFO + APNAP.
+/// A spell or ability on the stack. Carries its controller and — for this slice
+/// — the def of the spell and its (single, optional) target, frozen at cast
+/// time (CR 601.2). Modes/X/multiple targets/source-ability payloads deferred.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct StackObject {
     pub id: ObjectId,
     pub controller: PlayerId,
+    pub def_id: u64,
+    pub target: Option<ObjectId>,
+}
+
+impl StackObject {
+    pub fn new(id: ObjectId, controller: PlayerId, def_id: u64, target: Option<ObjectId>) -> Self {
+        StackObject { id, controller, def_id, target }
+    }
 }
 
 /// Whose turn it is, who holds priority, and how many players have passed in a
@@ -104,10 +113,13 @@ mod tests {
     }
 
     #[test]
-    fn stack_object_is_a_value() {
-        let s = StackObject { id: ObjectId(7), controller: PlayerId(1) };
-        let s2 = s; // Copy
-        assert_eq!(s2.id, ObjectId(7));
-        assert_eq!(s2.controller, PlayerId(1));
+    fn stack_object_carries_payload() {
+        let s = StackObject::new(ObjectId(7), PlayerId(1), 42, Some(ObjectId(9)));
+        assert_eq!(s.id, ObjectId(7));
+        assert_eq!(s.controller, PlayerId(1));
+        assert_eq!(s.def_id, 42);
+        assert_eq!(s.target, Some(ObjectId(9)));
+        let s2 = s; // still Copy
+        assert_eq!(s2.def_id, 42);
     }
 }
