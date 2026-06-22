@@ -2,7 +2,8 @@
 //! BaseChars and static continuous effects that layers::compute() consumes.
 //! This is shared `&'static`-style data — it is NOT part of the forked GameState.
 
-use crate::layers::{Ability, ColorSet, Pt, TypeSet};
+use crate::layers::{Ability, Color, ColorSet, Pt, TypeSet};
+use std::collections::HashMap;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct DefId(pub u64);
@@ -89,10 +90,98 @@ impl CardDef {
     }
 }
 
+/// The static card database. Shared, not forked — a plain HashMap is correct
+/// because this is never on the GameState copy-on-write path.
+#[derive(Clone, Debug)]
+pub struct CardDb {
+    defs: HashMap<DefId, CardDef>,
+}
+
+impl CardDb {
+    pub fn new() -> Self {
+        CardDb { defs: HashMap::new() }
+    }
+    pub fn insert(&mut self, def: CardDef) {
+        self.defs.insert(def.def_id(), def);
+    }
+    pub fn get(&self, id: DefId) -> Option<&CardDef> {
+        self.defs.get(&id)
+    }
+    pub fn len(&self) -> usize {
+        self.defs.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.defs.is_empty()
+    }
+}
+
+impl Default for CardDb {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A small hand-authored frozen pool for engine bring-up. Real Scryfall/MTGJSON
+/// ingest is a later plan.
+pub fn sample_pool() -> CardDb {
+    let mut db = CardDb::new();
+    db.insert(
+        CardDef::new(1, "Grizzly Bears", 2)
+            .with_types(TypeSet::none().with_creature())
+            .with_colors(ColorSet::colorless().with(Color::Green))
+            .with_pt(2, 2),
+    );
+    db.insert(
+        CardDef::new(2, "Serra Angel", 5)
+            .with_types(TypeSet::none().with_creature())
+            .with_colors(ColorSet::colorless().with(Color::White))
+            .with_pt(4, 4)
+            .with_keyword(Ability::Flying)
+            .with_keyword(Ability::Vigilance),
+    );
+    db.insert(
+        CardDef::new(3, "Glorious Anthem", 3)
+            .with_types(TypeSet::none().with_enchantment())
+            .with_colors(ColorSet::colorless().with(Color::White))
+            .with_static(StaticAbility::AnthemOtherCreatures { power: 1, toughness: 1 }),
+    );
+    db.insert(
+        CardDef::new(4, "Forest", 0).with_types(TypeSet::none().with_land()),
+    );
+    db.insert(
+        CardDef::new(5, "Plains", 0).with_types(TypeSet::none().with_land()),
+    );
+    db
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layers::Color;
+
+    #[test]
+    fn carddb_insert_and_get() {
+        let mut db = CardDb::new();
+        db.insert(CardDef::new(1, "Grizzly Bears", 2).with_pt(2, 2));
+        assert_eq!(db.len(), 1);
+        assert_eq!(db.get(DefId(1)).unwrap().name(), "Grizzly Bears");
+        assert!(db.get(DefId(999)).is_none());
+    }
+
+    #[test]
+    fn sample_pool_has_the_expected_cards() {
+        let db = sample_pool();
+        // 5 cards: bears, serra, anthem, forest, plains
+        assert_eq!(db.len(), 5);
+        // Serra Angel is a 4/4 flyer.
+        let serra = db
+            .defs
+            .values()
+            .find(|d| d.name() == "Serra Angel")
+            .expect("serra present");
+        let base = serra.base_chars();
+        assert_eq!(base.pt, Some(Pt { power: 4, toughness: 4 }));
+        assert!(base.abilities.has(Ability::Flying));
+    }
 
     #[test]
     fn builds_a_creature_def() {
