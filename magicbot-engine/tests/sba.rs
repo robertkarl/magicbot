@@ -6,6 +6,28 @@ use magicbot_engine::object::Zone;
 use magicbot_engine::state::GameState;
 
 #[test]
+fn cascading_death_resolves_in_one_check_call() {
+    // Field Marshal (DefId 6): a 2/2 creature that gives OTHER creatures +1/+1.
+    // A Grizzly Bears (2/2) with 2 marked damage is 3/3 under the Marshal's anthem
+    // and survives. The Marshal itself has 2 marked damage -> 2/2 with 2 damage ->
+    // lethal -> dies in pass 1. With the Marshal gone, the bears revert to 2/2 with
+    // 2 damage -> lethal -> dies in pass 2. ONE check call must resolve both
+    // (fixpoint), returning 2 events.
+    let db = sample_pool();
+    let mut s = GameState::new(2, 0);
+    let marshal = s.create_object(PlayerId(0), Zone::Battlefield, 6);
+    let bears = s.create_object(PlayerId(0), Zone::Battlefield, 1);
+    s.get_mut(marshal).unwrap().set_controller(Some(PlayerId(0)));
+    s.get_mut(bears).unwrap().set_controller(Some(PlayerId(0)));
+    s.get_mut(marshal).unwrap().mark_damage(2); // 2/2, lethal to itself (no self-anthem)
+    s.get_mut(bears).unwrap().mark_damage(2);   // 3/3 under anthem, survives pass 1
+
+    let events = s.check_state_based_actions(&db);
+    assert_eq!(events.len(), 2, "marshal dies, then the un-anthem'd bears die — both in one call");
+    assert_eq!(s.battlefield_len(), 0, "fixpoint clears the board");
+}
+
+#[test]
 fn anthem_saves_a_creature_from_lethal_then_removal_kills_it() {
     // Bears 2/2 with 2 marked damage would die, but a +1/+1 anthem makes it 3/3
     // (3 toughness > 2 damage) -> survives. SBA reads COMPUTED toughness.

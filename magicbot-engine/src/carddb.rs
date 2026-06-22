@@ -176,6 +176,13 @@ pub fn sample_pool() -> CardDb {
     db.insert(
         CardDef::new(DefId(5), "Plains", 0).with_types(TypeSet::none().with_land()),
     );
+    db.insert(
+        CardDef::new(DefId(6), "Field Marshal", 4)
+            .with_types(TypeSet::none().with_creature())
+            .with_colors(ColorSet::colorless().with(Color::White))
+            .with_pt(2, 2)
+            .with_static(StaticAbility::AnthemOtherCreatures { power: 1, toughness: 1 }),
+    );
     db
 }
 
@@ -195,8 +202,8 @@ mod tests {
     #[test]
     fn sample_pool_has_the_expected_cards() {
         let db = sample_pool();
-        // 5 cards: bears, serra, anthem, forest, plains
-        assert_eq!(db.len(), 5);
+        // 6 cards: bears, serra, anthem, forest, plains, field marshal
+        assert_eq!(db.len(), 6);
         // Serra Angel is a 4/4 flyer.
         let serra = db.get(DefId(2)).expect("serra present");
         let base = serra.base_chars();
