@@ -276,6 +276,9 @@ impl GameState {
                             });
                         }
                     }
+                    StaticAbility::SpellDealsDamage { .. } => {
+                        // Spell marker; not a continuous ability — no layer effect.
+                    }
                 }
             }
         }
