@@ -26,7 +26,6 @@ pub enum CounterKind {
 pub struct InstanceState {
     tapped: bool,
     counters: im::HashMap<CounterKind, i32>,
-    #[allow(dead_code)]
     marked_damage: u32,
     #[allow(dead_code)]
     attached_to: Option<ObjectId>,
@@ -132,6 +131,19 @@ impl Object {
             .with_plus1(self.counter_count(CounterKind::PlusOnePlusOne))
             .with_minus1(self.counter_count(CounterKind::MinusOneMinusOne))
     }
+
+    /// CR 120.3: damage is marked on the creature (not subtracted from toughness)
+    /// and accumulates until cleanup.
+    pub fn mark_damage(&mut self, amount: u32) {
+        self.instance.marked_damage += amount;
+    }
+    pub fn marked_damage(&self) -> u32 {
+        self.instance.marked_damage
+    }
+    /// CR 514.2: marked damage is removed as the turn ends (cleanup).
+    pub fn clear_damage(&mut self) {
+        self.instance.marked_damage = 0;
+    }
 }
 
 #[cfg(test)]
@@ -176,5 +188,18 @@ mod tests {
         let c = o.layer_counters();
         // net +2/+2
         assert_eq!(c.net_pt(), (2, 2));
+    }
+
+    #[test]
+    fn marked_damage_accumulates_and_clears() {
+        use crate::ids::{IdMinter, PlayerId};
+        let mut m = IdMinter::new();
+        let mut o = Object::new(m.mint(), PlayerId(0), Zone::Battlefield, 1);
+        assert_eq!(o.marked_damage(), 0);
+        o.mark_damage(2);
+        o.mark_damage(1);
+        assert_eq!(o.marked_damage(), 3);
+        o.clear_damage();
+        assert_eq!(o.marked_damage(), 0);
     }
 }
