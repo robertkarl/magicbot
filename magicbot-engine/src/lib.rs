@@ -7,6 +7,7 @@ pub mod zones;
 pub mod state;
 pub mod layers;
 pub mod carddb;
+pub mod events;
 
 #[cfg(test)]
 mod smoke {
