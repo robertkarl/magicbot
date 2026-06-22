@@ -210,6 +210,15 @@ pub fn layer_of(e: &Effect) -> Layer {
     }
 }
 
+/// Returns the effects in `layer`, ordered for application.
+///
+/// CR 613.7 timestamp ordering (ascending) is implemented. CR 613.8 DEPENDENCY
+/// ordering is DEFERRED to a later plan: when one same-layer effect changes what
+/// another applies to (e.g. Blood Moon vs. an Urborg-style effect in layer 4),
+/// dependency order overrides timestamp, with mutual loops falling back to
+/// timestamp (613.8b) and re-evaluation after each application (613.8c). This
+/// stub applies pure timestamp order, which is correct for all non-dependent
+/// effect sets (the common case and every conformance case in this slice).
 fn effects_in_layer(
     effects: &[ContinuousEffect],
     layer: Layer,
@@ -217,7 +226,6 @@ fn effects_in_layer(
     let mut v: Vec<&ContinuousEffect> =
         effects.iter().filter(|e| layer_of(&e.effect) == layer).collect();
     // CR 613.7: ascending timestamp order within a layer.
-    // CR 613.8 dependency ordering is DEFERRED (stub: timestamp only).
     v.sort_by_key(|e| e.timestamp.0);
     v
 }
