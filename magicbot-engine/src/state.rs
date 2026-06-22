@@ -71,6 +71,69 @@ impl GameState {
         let def = db.get(crate::carddb::DefId(obj.def_id()))?;
         Some(def.base_chars())
     }
+
+    /// Gather the static continuous effects that currently apply to `target`,
+    /// scoped per their affected-set. This slice handles AnthemOtherCreatures:
+    /// "other creatures you control get +X/+Y". CardDb is passed in.
+    pub fn active_static_effects_for(
+        &self,
+        target: ObjectId,
+        db: &crate::carddb::CardDb,
+    ) -> Vec<crate::layers::ContinuousEffect> {
+        use crate::carddb::{DefId, StaticAbility};
+        use crate::layers::{ContinuousEffect, Effect};
+        use crate::ids::Timestamp;
+
+        let mut out = Vec::new();
+
+        // The target must be a creature for "other creatures" anthems to apply.
+        let target_obj = match self.objects.get(&target) {
+            Some(o) => o,
+            None => return out,
+        };
+        let target_is_creature = db
+            .get(DefId(target_obj.def_id()))
+            .map(|d| d.is_creature())
+            .unwrap_or(false);
+        if !target_is_creature {
+            return out;
+        }
+        let target_controller = target_obj.controller();
+
+        // Scan all objects on the battlefield for anthem sources.
+        let mut ts: u64 = 0;
+        for (sid, src) in self.objects.iter() {
+            if src.zone() != crate::object::Zone::Battlefield {
+                continue;
+            }
+            if *sid == target {
+                continue; // "other"
+            }
+            let def = match db.get(DefId(src.def_id())) {
+                Some(d) => d,
+                None => continue,
+            };
+            for sa in def.static_abilities() {
+                match sa {
+                    StaticAbility::AnthemOtherCreatures { power, toughness } => {
+                        // "you control": source controller == target controller.
+                        if src.controller() == target_controller && target_controller.is_some() {
+                            ts += 1;
+                            out.push(ContinuousEffect {
+                                effect: Effect::ModifyPt {
+                                    power: *power,
+                                    toughness: *toughness,
+                                },
+                                timestamp: Timestamp(ts),
+                                is_cda: false,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -106,6 +169,45 @@ mod characteristics_tests {
         // def_id 777 is not in sample_pool.
         let id = s.create_object(PlayerId(0), Zone::Battlefield, 777);
         assert!(s.base_chars_of(id, &db).is_none());
+    }
+
+    #[test]
+    fn anthem_effect_applies_to_other_creature_same_controller() {
+        let db = sample_pool();
+        let mut s = GameState::new(2, 0);
+        // Bears (creature, def 1) and Anthem (enchantment, def 3), both controller 0.
+        let bears = s.create_object(PlayerId(0), Zone::Battlefield, 1);
+        let _anthem = s.create_object(PlayerId(0), Zone::Battlefield, 3);
+        // Set controllers explicitly (create_object leaves controller None; we set owner=controller for battlefield here).
+        s.get_mut(bears).unwrap().set_controller(Some(PlayerId(0)));
+        s.get_mut(_anthem).unwrap().set_controller(Some(PlayerId(0)));
+
+        let effects = s.active_static_effects_for(bears, &db);
+        assert_eq!(effects.len(), 1, "anthem applies to the bears");
+    }
+
+    #[test]
+    fn anthem_does_not_apply_to_itself() {
+        let db = sample_pool();
+        let mut s = GameState::new(2, 0);
+        let anthem = s.create_object(PlayerId(0), Zone::Battlefield, 3);
+        s.get_mut(anthem).unwrap().set_controller(Some(PlayerId(0)));
+        // The anthem is an enchantment (not a creature) and is itself — no effect on itself.
+        let effects = s.active_static_effects_for(anthem, &db);
+        assert_eq!(effects.len(), 0);
+    }
+
+    #[test]
+    fn anthem_does_not_apply_across_controllers() {
+        let db = sample_pool();
+        let mut s = GameState::new(2, 0);
+        let bears = s.create_object(PlayerId(1), Zone::Battlefield, 1);
+        let anthem = s.create_object(PlayerId(0), Zone::Battlefield, 3);
+        s.get_mut(bears).unwrap().set_controller(Some(PlayerId(1)));
+        s.get_mut(anthem).unwrap().set_controller(Some(PlayerId(0)));
+        // bears controlled by P1, anthem by P0 -> "other creatures YOU control" excludes it.
+        let effects = s.active_static_effects_for(bears, &db);
+        assert_eq!(effects.len(), 0);
     }
 }
 
