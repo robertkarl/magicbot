@@ -64,14 +64,14 @@ pub struct Object {
     owner: PlayerId,
     controller: Option<PlayerId>,
     zone: Zone,
-    def_id: u32,
+    def_id: u64,
     instance: InstanceState,
     #[allow(dead_code)]
     timestamp: Timestamp,
 }
 
 impl Object {
-    pub fn new(id: ObjectId, owner: PlayerId, zone: Zone, def_id: u32) -> Self {
+    pub fn new(id: ObjectId, owner: PlayerId, zone: Zone, def_id: u64) -> Self {
         Object {
             id,
             owner,
@@ -95,7 +95,7 @@ impl Object {
     pub fn zone(&self) -> Zone {
         self.zone
     }
-    pub fn def_id(&self) -> u32 {
+    pub fn def_id(&self) -> u64 {
         self.def_id
     }
 

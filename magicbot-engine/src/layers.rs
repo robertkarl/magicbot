@@ -28,6 +28,14 @@ impl TypeSet {
         self.land = true;
         self
     }
+    pub fn with_enchantment(mut self) -> Self {
+        self.enchantment = true;
+        self
+    }
+    pub fn with_artifact(mut self) -> Self {
+        self.artifact = true;
+        self
+    }
     pub fn is_creature(&self) -> bool {
         self.creature
     }

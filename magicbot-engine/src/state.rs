@@ -35,7 +35,7 @@ impl GameState {
         self.clone()
     }
 
-    pub fn create_object(&mut self, owner: PlayerId, zone: Zone, def_id: u32) -> ObjectId {
+    pub fn create_object(&mut self, owner: PlayerId, zone: Zone, def_id: u64) -> ObjectId {
         let id = self.minter.mint();
         let obj = Object::new(id, owner, zone, def_id);
         self.objects.insert(id, obj);
