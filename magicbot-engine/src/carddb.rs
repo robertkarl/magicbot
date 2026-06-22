@@ -63,6 +63,21 @@ impl CardDef {
         self
     }
 
+    /// The layer-1 copiable base (CR 613.2c) for this card: printed
+    /// characteristics folded into the form layers::compute() consumes.
+    pub fn base_chars(&self) -> crate::layers::BaseChars {
+        let mut abilities = crate::layers::AbilitySet::new();
+        for &kw in &self.keywords {
+            abilities.add(kw);
+        }
+        crate::layers::BaseChars {
+            pt: self.printed_pt,
+            types: self.types,
+            colors: self.colors,
+            abilities,
+        }
+    }
+
     pub fn def_id(&self) -> DefId {
         self.def_id
     }
@@ -88,6 +103,30 @@ mod tests {
         assert_eq!(d.name(), "Grizzly Bears");
         assert_eq!(d.mana_value(), 2);
         assert_eq!(d.def_id(), DefId(1));
+    }
+
+    #[test]
+    fn base_chars_reflects_printed_values() {
+        use crate::layers::{compute, Counters, Status};
+
+        let serra = CardDef::new(2, "Serra Angel", 5)
+            .with_types(TypeSet::none().with_creature())
+            .with_colors(ColorSet::colorless().with(Color::White))
+            .with_pt(4, 4)
+            .with_keyword(Ability::Flying)
+            .with_keyword(Ability::Vigilance);
+
+        let base = serra.base_chars();
+        assert_eq!(base.pt, Some(Pt { power: 4, toughness: 4 }));
+        assert!(base.types.is_creature());
+        assert!(base.colors.has(Color::White));
+        assert!(base.abilities.has(Ability::Flying));
+        assert!(base.abilities.has(Ability::Vigilance));
+
+        // And it flows through the layer engine unchanged with no effects.
+        let out = compute(&base, &[], &Counters::new(), Status { tapped: false });
+        assert_eq!(out.pt, Some(Pt { power: 4, toughness: 4 }));
+        assert!(out.abilities.has(Ability::Flying));
     }
 
     #[test]
