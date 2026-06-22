@@ -94,6 +94,16 @@ impl CardDef {
             .collect()
     }
 
+    /// The raw static abilities (kind preserved, for affected-set scoping).
+    pub fn static_abilities(&self) -> &[StaticAbility] {
+        &self.statics
+    }
+
+    /// Whether the printed base types include creature.
+    pub fn is_creature(&self) -> bool {
+        self.types.is_creature()
+    }
+
     pub fn def_id(&self) -> DefId {
         self.def_id
     }
@@ -244,6 +254,21 @@ mod tests {
             }
             other => panic!("expected ModifyPt, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn static_abilities_and_is_creature_accessors() {
+        let anthem = CardDef::new(DefId(3), "Glorious Anthem", 3)
+            .with_types(TypeSet::none().with_enchantment())
+            .with_static(StaticAbility::AnthemOtherCreatures { power: 1, toughness: 1 });
+        assert_eq!(anthem.static_abilities().len(), 1);
+        assert!(!anthem.is_creature());
+
+        let bears = CardDef::new(DefId(1), "Grizzly Bears", 2)
+            .with_types(TypeSet::none().with_creature())
+            .with_pt(2, 2);
+        assert!(bears.is_creature());
+        assert_eq!(bears.static_abilities().len(), 0);
     }
 
     #[test]
