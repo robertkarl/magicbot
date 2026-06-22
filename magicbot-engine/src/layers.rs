@@ -210,20 +210,51 @@ pub fn layer_of(e: &Effect) -> Layer {
     }
 }
 
+fn effects_in_layer(
+    effects: &[ContinuousEffect],
+    layer: Layer,
+) -> Vec<&ContinuousEffect> {
+    let mut v: Vec<&ContinuousEffect> =
+        effects.iter().filter(|e| layer_of(&e.effect) == layer).collect();
+    // CR 613.7: ascending timestamp order within a layer.
+    // CR 613.8 dependency ordering is DEFERRED (stub: timestamp only).
+    v.sort_by_key(|e| e.timestamp.0);
+    v
+}
+
 /// CR 613.5: characteristics are a pure function recomputed on demand.
-/// Skeleton — Tasks 3-6 fill in the per-layer application.
 pub fn compute(
     base: &BaseChars,
-    _effects: &[ContinuousEffect],
-    _counters: &Counters,
+    effects: &[ContinuousEffect],
+    counters: &Counters,
     _status: Status,
 ) -> Chars {
-    Chars {
-        pt: base.pt,
-        types: base.types,
-        colors: base.colors,
-        abilities: base.abilities.clone(),
+    // Start from the layer-1 copiable base (copy/face-down handled in a later task).
+    let mut types = base.types;
+    let mut colors = base.colors;
+    let abilities = base.abilities.clone();
+    let pt = base.pt;
+
+    // Layer 4: type-changing (OR new types in).
+    for ce in effects_in_layer(effects, Layer::Type) {
+        if let Effect::AddType(t) = &ce.effect {
+            if t.is_creature() {
+                types.set_creature(true);
+            }
+        }
     }
+
+    // Layer 5: color-changing (set; last timestamp wins).
+    for ce in effects_in_layer(effects, Layer::Color) {
+        if let Effect::SetColors(c) = &ce.effect {
+            colors.set_to(*c);
+        }
+    }
+
+    // Layers 6 and 7 added in later tasks.
+    let _ = counters;
+
+    Chars { pt, types, colors, abilities }
 }
 
 #[cfg(test)]
@@ -286,5 +317,55 @@ mod compute_skeleton_tests {
         assert_eq!(layer_of(&Effect::SetBasePt(Pt { power: 1, toughness: 1 })), Layer::Pt);
         assert_eq!(layer_of(&Effect::ModifyPt { power: 1, toughness: 1 }), Layer::Pt);
         assert_eq!(layer_of(&Effect::SwitchPt), Layer::Pt);
+    }
+}
+
+#[cfg(test)]
+mod layer_4_5_tests {
+    use super::*;
+    use crate::ids::Timestamp;
+
+    fn land_base() -> BaseChars {
+        BaseChars {
+            pt: None,
+            types: TypeSet::none().with_land(),
+            colors: ColorSet::colorless(),
+            abilities: AbilitySet::new(),
+        }
+    }
+
+    #[test]
+    fn animate_land_adds_creature_type_layer_4() {
+        // CR 613.1d layer 4: type-changing. "Target land becomes a creature."
+        let base = land_base();
+        let effects = vec![ContinuousEffect {
+            effect: Effect::AddType(TypeSet::none().with_creature()),
+            timestamp: Timestamp(1),
+            is_cda: false,
+        }];
+        let out = compute(&base, &effects, &Counters::new(), Status { tapped: false });
+        assert!(out.types.is_creature(), "creature type added");
+        assert!(out.types.is_land(), "still a land");
+    }
+
+    #[test]
+    fn color_set_last_timestamp_wins_layer_5() {
+        // CR 613.1e layer 5, CR 613.7 timestamp order within a layer.
+        let base = land_base();
+        let effects = vec![
+            ContinuousEffect {
+                effect: Effect::SetColors(ColorSet::colorless().with(Color::White)),
+                timestamp: Timestamp(1),
+                is_cda: false,
+            },
+            ContinuousEffect {
+                effect: Effect::SetColors(ColorSet::colorless().with(Color::Blue)),
+                timestamp: Timestamp(2),
+                is_cda: false,
+            },
+        ];
+        let out = compute(&base, &effects, &Counters::new(), Status { tapped: false });
+        assert!(out.colors.has(Color::Blue), "later timestamp wins");
+        assert!(!out.colors.has(Color::White), "earlier set overwritten");
     }
 }
