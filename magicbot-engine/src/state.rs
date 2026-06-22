@@ -58,6 +58,55 @@ impl GameState {
     pub fn battlefield_len(&self) -> usize {
         self.zones.battlefield_len()
     }
+
+    /// The layer-1 printed base for an object, resolved through the CardDb.
+    /// `None` if the object or its definition is unknown. CardDb is passed in —
+    /// it is static shared data, never stored on GameState.
+    pub fn base_chars_of(
+        &self,
+        id: ObjectId,
+        db: &crate::carddb::CardDb,
+    ) -> Option<crate::layers::BaseChars> {
+        let obj = self.objects.get(&id)?;
+        let def = db.get(crate::carddb::DefId(obj.def_id()))?;
+        Some(def.base_chars())
+    }
+}
+
+#[cfg(test)]
+mod characteristics_tests {
+    use super::*;
+    use crate::carddb::sample_pool;
+    use crate::ids::PlayerId;
+    use crate::layers::Pt;
+    use crate::object::Zone;
+
+    #[test]
+    fn base_chars_of_resolves_printed_pt() {
+        let db = sample_pool();
+        let mut s = GameState::new(2, 0);
+        // Grizzly Bears is DefId(1), a 2/2.
+        let id = s.create_object(PlayerId(0), Zone::Battlefield, 1);
+        let base = s.base_chars_of(id, &db).expect("base chars");
+        assert_eq!(base.pt, Some(Pt { power: 2, toughness: 2 }));
+        assert!(base.types.is_creature());
+    }
+
+    #[test]
+    fn base_chars_of_unknown_object_is_none() {
+        let db = sample_pool();
+        let s = GameState::new(2, 0);
+        assert!(s.base_chars_of(crate::ids::ObjectId(999), &db).is_none());
+    }
+
+    #[test]
+    fn base_chars_of_unknown_def_is_none() {
+        let db = sample_pool();
+        let mut s = GameState::new(2, 0);
+        // def_id 777 is not in sample_pool.
+        let id = s.create_object(PlayerId(0), Zone::Battlefield, 777);
+        assert!(s.base_chars_of(id, &db).is_none());
+    }
 }
 
 #[cfg(test)]
