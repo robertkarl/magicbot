@@ -61,6 +61,16 @@ impl GameState {
         self.zones.battlefield_len()
     }
 
+    /// Every object id currently on the battlefield. Order is unspecified.
+    /// A read-only observation helper for drivers (a demo, an AI's observe()).
+    pub fn battlefield_ids(&self) -> Vec<ObjectId> {
+        self.objects
+            .iter()
+            .filter(|(_, o)| o.zone() == crate::object::Zone::Battlefield)
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
     pub fn priority_holder(&self) -> PlayerId {
         self.priority.holder()
     }
@@ -328,6 +338,33 @@ impl GameState {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod observe_tests {
+    use super::*;
+    use crate::ids::PlayerId;
+    use crate::object::Zone;
+
+    #[test]
+    fn battlefield_ids_lists_battlefield_objects() {
+        let mut s = GameState::new(2, 0);
+        let a = s.create_object(PlayerId(0), Zone::Battlefield, 1);
+        let b = s.create_object(PlayerId(0), Zone::Battlefield, 2);
+        let _hand = s.create_object(PlayerId(0), Zone::Hand, 1); // not on battlefield
+
+        let mut ids = s.battlefield_ids();
+        ids.sort();
+        let mut want = vec![a, b];
+        want.sort();
+        assert_eq!(ids, want);
+    }
+
+    #[test]
+    fn battlefield_ids_empty_when_no_battlefield() {
+        let s = GameState::new(2, 0);
+        assert!(s.battlefield_ids().is_empty());
     }
 }
 
