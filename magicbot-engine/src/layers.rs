@@ -129,6 +129,103 @@ pub struct Chars {
     pub abilities: AbilitySet,
 }
 
+use crate::ids::Timestamp;
+
+#[derive(Clone, Debug)]
+pub struct BaseChars {
+    pub pt: Option<Pt>,
+    pub types: TypeSet,
+    pub colors: ColorSet,
+    pub abilities: AbilitySet,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Layer {
+    Type,
+    Color,
+    Ability,
+    Pt,
+}
+
+#[derive(Clone, Debug)]
+pub enum Effect {
+    AddType(TypeSet),
+    SetColors(ColorSet),
+    AddAbility(Ability),
+    RemoveAllAbilities,
+    SetBasePt(Pt),
+    ModifyPt { power: i32, toughness: i32 },
+    SwitchPt,
+}
+
+#[derive(Clone, Debug)]
+pub struct ContinuousEffect {
+    pub effect: Effect,
+    pub timestamp: Timestamp,
+    pub is_cda: bool,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct Counters {
+    plus1: i32,
+    minus1: i32,
+}
+
+impl Counters {
+    pub fn new() -> Self {
+        Counters { plus1: 0, minus1: 0 }
+    }
+    pub fn with_plus1(mut self, n: i32) -> Self {
+        self.plus1 += n;
+        self
+    }
+    pub fn with_minus1(mut self, n: i32) -> Self {
+        self.minus1 += n;
+        self
+    }
+    /// CR 122 / 704.5q net for P/T purposes (annihilation handled elsewhere as SBA).
+    pub fn net_pt(&self) -> (i32, i32) {
+        let net = self.plus1 - self.minus1;
+        (net, net)
+    }
+}
+
+impl Default for Counters {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct Status {
+    pub tapped: bool,
+}
+
+pub fn layer_of(e: &Effect) -> Layer {
+    match e {
+        Effect::AddType(_) => Layer::Type,
+        Effect::SetColors(_) => Layer::Color,
+        Effect::AddAbility(_) | Effect::RemoveAllAbilities => Layer::Ability,
+        Effect::SetBasePt(_) | Effect::ModifyPt { .. } | Effect::SwitchPt => Layer::Pt,
+    }
+}
+
+/// CR 613.5: characteristics are a pure function recomputed on demand.
+/// Skeleton — Tasks 3-6 fill in the per-layer application.
+pub fn compute(
+    base: &BaseChars,
+    _effects: &[ContinuousEffect],
+    _counters: &Counters,
+    _status: Status,
+) -> Chars {
+    Chars {
+        pt: base.pt,
+        types: base.types,
+        colors: base.colors,
+        abilities: base.abilities.clone(),
+    }
+}
+
 #[cfg(test)]
 mod value_tests {
     use super::*;
@@ -155,5 +252,39 @@ mod value_tests {
         assert!(a.has(Ability::Flying));
         a.remove(Ability::Flying);
         assert!(!a.has(Ability::Flying));
+    }
+}
+
+#[cfg(test)]
+mod compute_skeleton_tests {
+    use super::*;
+
+    fn base_creature() -> BaseChars {
+        BaseChars {
+            pt: Some(Pt { power: 2, toughness: 2 }),
+            types: TypeSet::none().with_creature(),
+            colors: ColorSet::colorless().with(Color::Green),
+            abilities: AbilitySet::new(),
+        }
+    }
+
+    #[test]
+    fn compute_with_no_effects_returns_base() {
+        let base = base_creature();
+        let out = compute(&base, &[], &Counters::new(), Status { tapped: false });
+        assert_eq!(out.pt, Some(Pt { power: 2, toughness: 2 }));
+        assert!(out.types.is_creature());
+        assert!(out.colors.has(Color::Green));
+    }
+
+    #[test]
+    fn layer_of_maps_effects() {
+        assert_eq!(layer_of(&Effect::AddType(TypeSet::none())), Layer::Type);
+        assert_eq!(layer_of(&Effect::SetColors(ColorSet::colorless())), Layer::Color);
+        assert_eq!(layer_of(&Effect::AddAbility(Ability::Flying)), Layer::Ability);
+        assert_eq!(layer_of(&Effect::RemoveAllAbilities), Layer::Ability);
+        assert_eq!(layer_of(&Effect::SetBasePt(Pt { power: 1, toughness: 1 })), Layer::Pt);
+        assert_eq!(layer_of(&Effect::ModifyPt { power: 1, toughness: 1 }), Layer::Pt);
+        assert_eq!(layer_of(&Effect::SwitchPt), Layer::Pt);
     }
 }
