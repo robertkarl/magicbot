@@ -6,7 +6,7 @@ use magicbot_engine::state::GameState;
 fn build_state(board_size: usize) -> GameState {
     let mut s = GameState::new(2, 0);
     for i in 0..board_size {
-        s.create_object(PlayerId((i % 2) as u8), Zone::Battlefield, i as u32);
+        s.create_object(PlayerId((i % 2) as u8), Zone::Battlefield, i as u64);
     }
     s
 }

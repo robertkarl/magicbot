@@ -30,9 +30,9 @@ pub struct CardDef {
 }
 
 impl CardDef {
-    pub fn new(def_id: u64, name: &str, mana_value: u8) -> CardDef {
+    pub fn new(def_id: DefId, name: &str, mana_value: u8) -> CardDef {
         CardDef {
-            def_id: DefId(def_id),
+            def_id,
             name: name.to_string(),
             mana_value,
             types: TypeSet::none(),
@@ -141,13 +141,13 @@ impl Default for CardDb {
 pub fn sample_pool() -> CardDb {
     let mut db = CardDb::new();
     db.insert(
-        CardDef::new(1, "Grizzly Bears", 2)
+        CardDef::new(DefId(1), "Grizzly Bears", 2)
             .with_types(TypeSet::none().with_creature())
             .with_colors(ColorSet::colorless().with(Color::Green))
             .with_pt(2, 2),
     );
     db.insert(
-        CardDef::new(2, "Serra Angel", 5)
+        CardDef::new(DefId(2), "Serra Angel", 5)
             .with_types(TypeSet::none().with_creature())
             .with_colors(ColorSet::colorless().with(Color::White))
             .with_pt(4, 4)
@@ -155,16 +155,16 @@ pub fn sample_pool() -> CardDb {
             .with_keyword(Ability::Vigilance),
     );
     db.insert(
-        CardDef::new(3, "Glorious Anthem", 3)
+        CardDef::new(DefId(3), "Glorious Anthem", 3)
             .with_types(TypeSet::none().with_enchantment())
             .with_colors(ColorSet::colorless().with(Color::White))
             .with_static(StaticAbility::AnthemOtherCreatures { power: 1, toughness: 1 }),
     );
     db.insert(
-        CardDef::new(4, "Forest", 0).with_types(TypeSet::none().with_land()),
+        CardDef::new(DefId(4), "Forest", 0).with_types(TypeSet::none().with_land()),
     );
     db.insert(
-        CardDef::new(5, "Plains", 0).with_types(TypeSet::none().with_land()),
+        CardDef::new(DefId(5), "Plains", 0).with_types(TypeSet::none().with_land()),
     );
     db
 }
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn carddb_insert_and_get() {
         let mut db = CardDb::new();
-        db.insert(CardDef::new(1, "Grizzly Bears", 2).with_pt(2, 2));
+        db.insert(CardDef::new(DefId(1), "Grizzly Bears", 2).with_pt(2, 2));
         assert_eq!(db.len(), 1);
         assert_eq!(db.get(DefId(1)).unwrap().name(), "Grizzly Bears");
         assert!(db.get(DefId(999)).is_none());
@@ -188,11 +188,7 @@ mod tests {
         // 5 cards: bears, serra, anthem, forest, plains
         assert_eq!(db.len(), 5);
         // Serra Angel is a 4/4 flyer.
-        let serra = db
-            .defs
-            .values()
-            .find(|d| d.name() == "Serra Angel")
-            .expect("serra present");
+        let serra = db.get(DefId(2)).expect("serra present");
         let base = serra.base_chars();
         assert_eq!(base.pt, Some(Pt { power: 4, toughness: 4 }));
         assert!(base.abilities.has(Ability::Flying));
@@ -200,7 +196,7 @@ mod tests {
 
     #[test]
     fn builds_a_creature_def() {
-        let d = CardDef::new(1, "Grizzly Bears", 2)
+        let d = CardDef::new(DefId(1), "Grizzly Bears", 2)
             .with_types(TypeSet::none().with_creature())
             .with_colors(ColorSet::colorless().with(Color::Green))
             .with_pt(2, 2);
@@ -213,7 +209,7 @@ mod tests {
     fn base_chars_reflects_printed_values() {
         use crate::layers::{compute, Counters, Status};
 
-        let serra = CardDef::new(2, "Serra Angel", 5)
+        let serra = CardDef::new(DefId(2), "Serra Angel", 5)
             .with_types(TypeSet::none().with_creature())
             .with_colors(ColorSet::colorless().with(Color::White))
             .with_pt(4, 4)
@@ -237,7 +233,7 @@ mod tests {
     fn anthem_static_effect_translates_to_modify_pt() {
         use crate::layers::Effect;
 
-        let anthem = CardDef::new(3, "Glorious Anthem", 3)
+        let anthem = CardDef::new(DefId(3), "Glorious Anthem", 3)
             .with_static(StaticAbility::AnthemOtherCreatures { power: 1, toughness: 1 });
         let effects = anthem.static_effects();
         assert_eq!(effects.len(), 1);
@@ -252,14 +248,14 @@ mod tests {
 
     #[test]
     fn builds_a_def_with_keyword_and_static() {
-        let d = CardDef::new(2, "Serra Angel", 5)
+        let d = CardDef::new(DefId(2), "Serra Angel", 5)
             .with_types(TypeSet::none().with_creature())
             .with_pt(4, 4)
             .with_keyword(Ability::Flying)
             .with_keyword(Ability::Vigilance);
         assert_eq!(d.name(), "Serra Angel");
 
-        let anthem = CardDef::new(3, "Glorious Anthem", 3)
+        let anthem = CardDef::new(DefId(3), "Glorious Anthem", 3)
             .with_types(TypeSet::none().with_enchantment())
             .with_static(StaticAbility::AnthemOtherCreatures { power: 1, toughness: 1 });
         assert_eq!(anthem.mana_value(), 3);
