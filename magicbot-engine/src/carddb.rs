@@ -79,6 +79,21 @@ impl CardDef {
         }
     }
 
+    /// The layer-system effect bodies produced by this card's static abilities.
+    /// The affected-set scoping ("other creatures you control") is the layer
+    /// engine's responsibility once wired into GameState (a later plan); this
+    /// produces the effect body only.
+    pub fn static_effects(&self) -> Vec<crate::layers::Effect> {
+        self.statics
+            .iter()
+            .map(|s| match s {
+                StaticAbility::AnthemOtherCreatures { power, toughness } => {
+                    crate::layers::Effect::ModifyPt { power: *power, toughness: *toughness }
+                }
+            })
+            .collect()
+    }
+
     pub fn def_id(&self) -> DefId {
         self.def_id
     }
@@ -216,6 +231,23 @@ mod tests {
         let out = compute(&base, &[], &Counters::new(), Status { tapped: false });
         assert_eq!(out.pt, Some(Pt { power: 4, toughness: 4 }));
         assert!(out.abilities.has(Ability::Flying));
+    }
+
+    #[test]
+    fn anthem_static_effect_translates_to_modify_pt() {
+        use crate::layers::Effect;
+
+        let anthem = CardDef::new(3, "Glorious Anthem", 3)
+            .with_static(StaticAbility::AnthemOtherCreatures { power: 1, toughness: 1 });
+        let effects = anthem.static_effects();
+        assert_eq!(effects.len(), 1);
+        match &effects[0] {
+            Effect::ModifyPt { power, toughness } => {
+                assert_eq!(*power, 1);
+                assert_eq!(*toughness, 1);
+            }
+            other => panic!("expected ModifyPt, got {other:?}"),
+        }
     }
 
     #[test]
