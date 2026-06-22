@@ -59,6 +59,45 @@ impl GameState {
         self.zones.battlefield_len()
     }
 
+    /// Move an object to another zone. CR 400.7: this mints a NEW object id and
+    /// drops all per-object state (counters, tapped, attachments). Returns the
+    /// MoveEvent, or None if `id` is unknown. Replacement effects, the 400.7a-m
+    /// carry-across exceptions, redirect-to-owner, and triggers are deferred.
+    pub fn move_object(
+        &mut self,
+        id: ObjectId,
+        to: Zone,
+    ) -> Option<crate::events::MoveEvent> {
+        let (owner, from, def_id) = {
+            let obj = self.objects.get(&id)?;
+            (obj.owner(), obj.zone(), obj.def_id())
+        };
+
+        debug_assert!(
+            to != crate::object::Zone::Stack && from != crate::object::Zone::Stack,
+            "Stack moves must go through the (future) cast/resolve path, not move_object"
+        );
+
+        // Remove from source zone and the object table.
+        self.zones.remove(from, owner, id);
+        self.objects.remove(&id);
+
+        // Mint a fresh object in the destination (state dropped).
+        let new_id = self.minter.mint();
+        let new_obj = Object::new(new_id, owner, to, def_id);
+        self.objects.insert(new_id, new_obj);
+        self.zones.insert(to, owner, new_id);
+
+        Some(crate::events::MoveEvent {
+            object_before: id,
+            object_after: new_id,
+            from,
+            to,
+            owner,
+            def_id,
+        })
+    }
+
     /// The layer-1 printed base for an object, resolved through the CardDb.
     /// `None` if the object or its definition is unknown. CardDb is passed in —
     /// it is static shared data, never stored on GameState.
@@ -86,6 +125,11 @@ impl GameState {
         let counters = obj.layer_counters();
         let status = crate::layers::Status { tapped: obj.is_tapped() };
         Some(crate::layers::compute(&base, &effects, &counters, status))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn zone_contains(&self, z: crate::object::Zone, owner: crate::ids::PlayerId, id: ObjectId) -> bool {
+        self.zones.contains(z, owner, id)
     }
 
     /// Gather the static continuous effects that currently apply to `target`,
@@ -282,6 +326,81 @@ mod characteristics_tests {
 
         let chars = s.characteristics(bears, &db).unwrap();
         assert_eq!(chars.pt, Some(Pt { power: 4, toughness: 4 }), "2/2 + two +1/+1 anthems = 4/4");
+    }
+}
+
+#[cfg(test)]
+mod move_tests {
+    use super::*;
+    use crate::events::{dies, leaves_battlefield};
+    use crate::ids::PlayerId;
+    use crate::object::{CounterKind, Zone};
+
+    #[test]
+    fn move_mints_new_id_and_drops_state() {
+        // CR 400.7: a zone change creates a new object with no memory.
+        let mut s = GameState::new(2, 0);
+        let id = s.create_object(PlayerId(0), Zone::Battlefield, 1);
+        s.get_mut(id).unwrap().tap();
+        s.get_mut(id).unwrap().add_counter(CounterKind::PlusOnePlusOne, 2);
+        s.get_mut(id).unwrap().set_controller(Some(PlayerId(0)));
+
+        let ev = s.move_object(id, Zone::Graveyard).expect("moved");
+
+        // new id, old id gone
+        assert_ne!(ev.object_before, ev.object_after);
+        assert!(s.get(id).is_none(), "old object removed from table");
+        let new_obj = s.get(ev.object_after).expect("new object present");
+
+        // state dropped
+        assert!(!new_obj.is_tapped(), "tapped dropped");
+        assert_eq!(new_obj.counter_count(CounterKind::PlusOnePlusOne), 0, "counters dropped");
+        assert_eq!(new_obj.zone(), Zone::Graveyard);
+        assert_eq!(new_obj.owner(), PlayerId(0), "owner preserved");
+        assert_eq!(new_obj.def_id(), 1, "def_id preserved");
+        assert_eq!(new_obj.controller(), None, "controller reset on move");
+    }
+
+    #[test]
+    fn move_battlefield_to_graveyard_is_dies() {
+        let mut s = GameState::new(2, 0);
+        let id = s.create_object(PlayerId(0), Zone::Battlefield, 1);
+        let ev = s.move_object(id, Zone::Graveyard).unwrap();
+        assert!(dies(&ev));
+        assert!(leaves_battlefield(&ev));
+    }
+
+    #[test]
+    fn move_exile_from_battlefield_is_ltb_not_dies() {
+        let mut s = GameState::new(2, 0);
+        let id = s.create_object(PlayerId(0), Zone::Battlefield, 1);
+        let ev = s.move_object(id, Zone::Exile).unwrap();
+        assert!(!dies(&ev));
+        assert!(leaves_battlefield(&ev));
+    }
+
+    #[test]
+    fn move_unknown_object_is_none() {
+        let mut s = GameState::new(2, 0);
+        assert!(s.move_object(crate::ids::ObjectId(999), Zone::Graveyard).is_none());
+    }
+
+    #[test]
+    fn moved_object_is_in_destination_zone_table() {
+        let mut s = GameState::new(2, 0);
+        let id = s.create_object(PlayerId(0), Zone::Hand, 1);
+        let ev = s.move_object(id, Zone::Battlefield).unwrap();
+        assert_eq!(s.battlefield_len(), 1);
+        assert_eq!(s.get(ev.object_after).unwrap().zone(), Zone::Battlefield);
+    }
+
+    #[test]
+    fn move_removes_old_id_from_source_zone_table() {
+        let mut s = GameState::new(2, 0);
+        let id = s.create_object(PlayerId(0), Zone::Battlefield, 1);
+        assert!(s.zone_contains(Zone::Battlefield, PlayerId(0), id));
+        let _ev = s.move_object(id, Zone::Graveyard).unwrap();
+        assert!(!s.zone_contains(Zone::Battlefield, PlayerId(0), id), "old id gone from source zone");
     }
 }
 

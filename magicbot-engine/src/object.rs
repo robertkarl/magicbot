@@ -99,7 +99,8 @@ impl Object {
         self.def_id
     }
 
-    pub fn set_zone(&mut self, z: Zone) {
+    #[allow(dead_code)]
+    pub(crate) fn set_zone(&mut self, z: Zone) {
         self.zone = z;
     }
     pub fn set_controller(&mut self, c: Option<PlayerId>) {
