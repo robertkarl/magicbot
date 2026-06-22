@@ -23,6 +23,7 @@ pub struct PriorityState {
 
 impl PriorityState {
     pub fn new(active_player: PlayerId, n_players: u8) -> Self {
+        debug_assert!(n_players > 0, "a game needs at least one player");
         PriorityState {
             active_player,
             priority_holder: active_player,
