@@ -255,7 +255,9 @@ pub fn compute(
     let mut abilities = base.abilities.clone();
     let mut pt = base.pt;
 
-    // Layer 4: type-changing (OR new types in).
+    // Layer 4: type-changing. Only creature-addition (animation) is modeled in
+    // this slice; land/artifact/enchantment flags on an AddType payload are a
+    // no-op until a later plan widens the type model.
     for ce in effects_in_layer(effects, Layer::Type) {
         if let Effect::AddType(t) = &ce.effect {
             if t.is_creature() {
@@ -280,6 +282,10 @@ pub fn compute(
         }
     }
 
+    // Layer 7 only applies to objects that have a P/T. P/T effects on a base
+    // with `pt: None` (a noncreature) are intentionally dropped: in real MTG an
+    // "animate" effect grants creature type AND P/T together, but that coupling
+    // is deferred to the CardDb plan. Effect::SetBasePt does NOT create P/T here.
     // Layer 7 (P/T), sublayers in fixed order 7a -> 7b -> 7c -> 7d (CR 613.4).
     if pt.is_some() {
         let pt_effects = effects_in_layer(effects, Layer::Pt);
@@ -567,6 +573,25 @@ mod layer_7_tests {
         ];
         let out = compute(&base, &effects, &Counters::new(), Status { tapped: false });
         assert_eq!(out.pt, Some(Pt { power: 4, toughness: 3 }));
+    }
+
+    #[test]
+    fn negative_toughness_is_not_clamped() {
+        // compute() returns raw P/T; 0-toughness death is an SBA handled elsewhere.
+        // A -3/-3 modify on a 1/1 yields -2/-2 and must NOT be clamped to 0.
+        let base = BaseChars {
+            pt: Some(Pt { power: 1, toughness: 1 }),
+            types: TypeSet::none().with_creature(),
+            colors: ColorSet::colorless(),
+            abilities: AbilitySet::new(),
+        };
+        let effects = vec![ContinuousEffect {
+            effect: Effect::ModifyPt { power: -3, toughness: -3 },
+            timestamp: crate::ids::Timestamp(1),
+            is_cda: false,
+        }];
+        let out = compute(&base, &effects, &Counters::new(), Status { tapped: false });
+        assert_eq!(out.pt, Some(Pt { power: -2, toughness: -2 }));
     }
 
     #[test]
