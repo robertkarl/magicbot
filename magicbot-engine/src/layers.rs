@@ -222,6 +222,18 @@ fn effects_in_layer(
     v
 }
 
+/// Like effects_in_layer but applies CR 613.3: CDA-sourced effects first,
+/// then non-CDA, each group ascending by timestamp.
+fn effects_in_layer_cda_first(
+    effects: &[ContinuousEffect],
+    layer: Layer,
+) -> Vec<&ContinuousEffect> {
+    let mut v = effects_in_layer(effects, layer);
+    // stable partition: CDAs (true) before non-CDAs (false), preserving timestamp order.
+    v.sort_by_key(|e| !e.is_cda);
+    v
+}
+
 /// CR 613.5: characteristics are a pure function recomputed on demand.
 pub fn compute(
     base: &BaseChars,
@@ -232,7 +244,7 @@ pub fn compute(
     // Start from the layer-1 copiable base (copy/face-down handled in a later task).
     let mut types = base.types;
     let mut colors = base.colors;
-    let abilities = base.abilities.clone();
+    let mut abilities = base.abilities.clone();
     let pt = base.pt;
 
     // Layer 4: type-changing (OR new types in).
@@ -251,7 +263,16 @@ pub fn compute(
         }
     }
 
-    // Layers 6 and 7 added in later tasks.
+    // Layer 6: ability add / remove-all. CR 613.3: CDAs first, then timestamp.
+    for ce in effects_in_layer_cda_first(effects, Layer::Ability) {
+        match &ce.effect {
+            Effect::AddAbility(a) => abilities.add(*a),
+            Effect::RemoveAllAbilities => abilities.clear(),
+            _ => {}
+        }
+    }
+
+    // Layer 7 added in a later task.
     let _ = counters;
 
     Chars { pt, types, colors, abilities }
@@ -317,6 +338,73 @@ mod compute_skeleton_tests {
         assert_eq!(layer_of(&Effect::SetBasePt(Pt { power: 1, toughness: 1 })), Layer::Pt);
         assert_eq!(layer_of(&Effect::ModifyPt { power: 1, toughness: 1 }), Layer::Pt);
         assert_eq!(layer_of(&Effect::SwitchPt), Layer::Pt);
+    }
+}
+
+#[cfg(test)]
+mod layer_6_tests {
+    use super::*;
+    use crate::ids::Timestamp;
+
+    fn vanilla() -> BaseChars {
+        BaseChars {
+            pt: Some(Pt { power: 2, toughness: 2 }),
+            types: TypeSet::none().with_creature(),
+            colors: ColorSet::colorless(),
+            abilities: AbilitySet::new(),
+        }
+    }
+
+    #[test]
+    fn add_ability_layer_6() {
+        let base = vanilla();
+        let effects = vec![ContinuousEffect {
+            effect: Effect::AddAbility(Ability::Flying),
+            timestamp: Timestamp(1),
+            is_cda: false,
+        }];
+        let out = compute(&base, &effects, &Counters::new(), Status { tapped: false });
+        assert!(out.abilities.has(Ability::Flying));
+    }
+
+    #[test]
+    fn add_then_remove_all_by_timestamp_f6() {
+        // CR 613.1f, 613.3: grant flying (ts1), then remove all abilities (ts2) -> no flying.
+        let base = vanilla();
+        let effects = vec![
+            ContinuousEffect {
+                effect: Effect::AddAbility(Ability::Flying),
+                timestamp: Timestamp(1),
+                is_cda: false,
+            },
+            ContinuousEffect {
+                effect: Effect::RemoveAllAbilities,
+                timestamp: Timestamp(2),
+                is_cda: false,
+            },
+        ];
+        let out = compute(&base, &effects, &Counters::new(), Status { tapped: false });
+        assert!(!out.abilities.has(Ability::Flying), "later remove-all wins");
+    }
+
+    #[test]
+    fn remove_all_then_add_by_timestamp_f6_reverse() {
+        // Reverse timestamps: remove all (ts1) then grant flying (ts2) -> flying present.
+        let base = vanilla();
+        let effects = vec![
+            ContinuousEffect {
+                effect: Effect::RemoveAllAbilities,
+                timestamp: Timestamp(1),
+                is_cda: false,
+            },
+            ContinuousEffect {
+                effect: Effect::AddAbility(Ability::Flying),
+                timestamp: Timestamp(2),
+                is_cda: false,
+            },
+        ];
+        let out = compute(&base, &effects, &Counters::new(), Status { tapped: false });
+        assert!(out.abilities.has(Ability::Flying), "later add wins");
     }
 }
 
