@@ -73,6 +73,11 @@ impl GameState {
             (obj.owner(), obj.zone(), obj.def_id())
         };
 
+        debug_assert!(
+            to != crate::object::Zone::Stack && from != crate::object::Zone::Stack,
+            "Stack moves must go through the (future) cast/resolve path, not move_object"
+        );
+
         // Remove from source zone and the object table.
         self.zones.remove(from, owner, id);
         self.objects.remove(&id);
@@ -120,6 +125,11 @@ impl GameState {
         let counters = obj.layer_counters();
         let status = crate::layers::Status { tapped: obj.is_tapped() };
         Some(crate::layers::compute(&base, &effects, &counters, status))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn zone_contains(&self, z: crate::object::Zone, owner: crate::ids::PlayerId, id: ObjectId) -> bool {
+        self.zones.contains(z, owner, id)
     }
 
     /// Gather the static continuous effects that currently apply to `target`,
@@ -333,6 +343,7 @@ mod move_tests {
         let id = s.create_object(PlayerId(0), Zone::Battlefield, 1);
         s.get_mut(id).unwrap().tap();
         s.get_mut(id).unwrap().add_counter(CounterKind::PlusOnePlusOne, 2);
+        s.get_mut(id).unwrap().set_controller(Some(PlayerId(0)));
 
         let ev = s.move_object(id, Zone::Graveyard).expect("moved");
 
@@ -347,6 +358,7 @@ mod move_tests {
         assert_eq!(new_obj.zone(), Zone::Graveyard);
         assert_eq!(new_obj.owner(), PlayerId(0), "owner preserved");
         assert_eq!(new_obj.def_id(), 1, "def_id preserved");
+        assert_eq!(new_obj.controller(), None, "controller reset on move");
     }
 
     #[test]
@@ -380,6 +392,15 @@ mod move_tests {
         let ev = s.move_object(id, Zone::Battlefield).unwrap();
         assert_eq!(s.battlefield_len(), 1);
         assert_eq!(s.get(ev.object_after).unwrap().zone(), Zone::Battlefield);
+    }
+
+    #[test]
+    fn move_removes_old_id_from_source_zone_table() {
+        let mut s = GameState::new(2, 0);
+        let id = s.create_object(PlayerId(0), Zone::Battlefield, 1);
+        assert!(s.zone_contains(Zone::Battlefield, PlayerId(0), id));
+        let _ev = s.move_object(id, Zone::Graveyard).unwrap();
+        assert!(!s.zone_contains(Zone::Battlefield, PlayerId(0), id), "old id gone from source zone");
     }
 }
 

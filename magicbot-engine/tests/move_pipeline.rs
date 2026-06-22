@@ -30,7 +30,6 @@ fn a1_dies_classification_and_characteristics_after_move() {
     let db = sample_pool();
     let mut s = GameState::new(2, 0);
     let id = s.create_object(PlayerId(0), Zone::Battlefield, 1);
-    s.get_mut(id).unwrap().set_controller(Some(PlayerId(0)));
 
     let ev = s.move_object(id, Zone::Graveyard).unwrap();
     assert!(dies(&ev));
