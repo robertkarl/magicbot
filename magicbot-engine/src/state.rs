@@ -1,5 +1,6 @@
 use crate::ids::{IdMinter, ObjectId, PlayerId};
 use crate::object::{Object, Zone};
+use crate::priority::{PriorityState, StackObject};
 use crate::zones::Zones;
 
 /// The whole game. Cloning this IS the fork — cheap by construction because every
@@ -9,13 +10,13 @@ use crate::zones::Zones;
 pub struct GameState {
     objects: im::HashMap<ObjectId, Object>,
     zones: Zones,
-    #[allow(dead_code)]
-    stack: im::Vector<ObjectId>,
+    stack: im::Vector<StackObject>,
     minter: IdMinter,
     #[allow(dead_code)]
     n_players: usize,
     #[allow(dead_code)]
     rng_seed: u64,
+    priority: PriorityState,
 }
 
 impl GameState {
@@ -27,6 +28,7 @@ impl GameState {
             minter: IdMinter::new(),
             n_players,
             rng_seed,
+            priority: PriorityState::new(PlayerId(0), n_players as u8),
         }
     }
 
@@ -57,6 +59,25 @@ impl GameState {
 
     pub fn battlefield_len(&self) -> usize {
         self.zones.battlefield_len()
+    }
+
+    pub fn priority_holder(&self) -> PlayerId {
+        self.priority.holder()
+    }
+
+    pub fn stack_len(&self) -> usize {
+        self.stack.len()
+    }
+
+    pub fn peek_stack(&self) -> Option<StackObject> {
+        self.stack.last().copied()
+    }
+
+    /// Put an object on top of the stack (CR 405.2 LIFO). The active player then
+    /// receives priority and the pass round restarts (CR 117.3c).
+    pub fn push_stack(&mut self, obj: StackObject) {
+        self.stack.push_back(obj);
+        self.priority.give_to_active();
     }
 
     /// Move an object to another zone. CR 400.7: this mints a NEW object id and
@@ -169,6 +190,33 @@ impl GameState {
             }
         }
         events
+    }
+
+    /// The current priority holder passes (CR 117). On a full round of passes,
+    /// runs state-based actions (CR 117.5), then either resolves the top of the
+    /// stack (CR 608.1) or ends the step if the stack is empty.
+    pub fn pass_priority(
+        &mut self,
+        db: &crate::carddb::CardDb,
+    ) -> crate::priority::PriorityOutcome {
+        use crate::priority::PriorityOutcome;
+
+        let full_round = self.priority.record_pass();
+        if !full_round {
+            return PriorityOutcome::Passed(self.priority.holder());
+        }
+
+        // CR 117.5: state-based actions are performed before the game proceeds.
+        let _sba_events = self.check_state_based_actions(db);
+
+        // CR 608.1 / 405.5: resolve the top of the stack, or end the step.
+        if let Some(top) = self.stack.pop_back() {
+            // A fresh priority round follows the resolution.
+            self.priority.reset_passes();
+            PriorityOutcome::Resolved(top)
+        } else {
+            PriorityOutcome::StepEnded
+        }
     }
 
     /// Gather the static continuous effects that currently apply to `target`,
@@ -510,6 +558,80 @@ mod move_tests {
         assert!(s.zone_contains(Zone::Battlefield, PlayerId(0), id));
         let _ev = s.move_object(id, Zone::Graveyard).unwrap();
         assert!(!s.zone_contains(Zone::Battlefield, PlayerId(0), id), "old id gone from source zone");
+    }
+}
+
+#[cfg(test)]
+mod priority_tests {
+    use super::*;
+    use crate::ids::PlayerId;
+    use crate::priority::StackObject;
+
+    #[test]
+    fn new_game_priority_is_active_player_empty_stack() {
+        let s = GameState::new(2, 0);
+        assert_eq!(s.priority_holder(), PlayerId(0));
+        assert_eq!(s.stack_len(), 0);
+        assert!(s.peek_stack().is_none());
+    }
+
+    #[test]
+    fn all_pass_empty_stack_ends_step() {
+        use crate::priority::PriorityOutcome;
+        let db = crate::carddb::sample_pool();
+        let mut s = GameState::new(2, 0);
+        // P0 passes (holder -> P1)
+        assert_eq!(s.pass_priority(&db), PriorityOutcome::Passed(PlayerId(1)));
+        // P1 passes -> full round, empty stack -> step ends
+        assert_eq!(s.pass_priority(&db), PriorityOutcome::StepEnded);
+    }
+
+    #[test]
+    fn all_pass_nonempty_stack_resolves_top() {
+        use crate::priority::PriorityOutcome;
+        let db = crate::carddb::sample_pool();
+        let mut s = GameState::new(2, 0);
+        let top = StackObject { id: crate::ids::ObjectId(42), controller: PlayerId(1) };
+        s.push_stack(StackObject { id: crate::ids::ObjectId(41), controller: PlayerId(0) });
+        s.push_stack(top); // top of stack
+        // push gave priority to active (P0). P0 passes -> P1. P1 passes -> full round.
+        assert_eq!(s.pass_priority(&db), PriorityOutcome::Passed(PlayerId(1)));
+        let outcome = s.pass_priority(&db);
+        assert_eq!(outcome, PriorityOutcome::Resolved(top), "LIFO: last pushed resolves first");
+        assert_eq!(s.stack_len(), 1, "one object left on the stack");
+        // after a resolution, the active player gets priority again
+        assert_eq!(s.priority_holder(), PlayerId(0));
+    }
+
+    #[test]
+    fn resolution_runs_sbas_first() {
+        use crate::priority::PriorityOutcome;
+        // A creature with lethal damage on the battlefield should be cleaned up by
+        // the SBA check that runs when all players pass (CR 117.5), even with an
+        // empty stack ending the step.
+        let db = crate::carddb::sample_pool();
+        let mut s = GameState::new(2, 0);
+        let bears = s.create_object(PlayerId(0), Zone::Battlefield, 1);
+        s.get_mut(bears).unwrap().set_controller(Some(PlayerId(0)));
+        s.get_mut(bears).unwrap().mark_damage(2); // lethal
+        // pass the full round; the SBA check fires before the step ends
+        let _ = s.pass_priority(&db); // P0 -> P1
+        let outcome = s.pass_priority(&db); // full round: SBAs run, then empty stack -> StepEnded
+        assert_eq!(outcome, PriorityOutcome::StepEnded);
+        assert_eq!(s.battlefield_len(), 0, "lethal creature cleaned up by SBA in the priority loop");
+    }
+
+    #[test]
+    fn push_stack_is_lifo_and_gives_active_priority() {
+        let mut s = GameState::new(2, 0);
+        // pretend P1 had priority (simulate a pass) then P1 puts something on stack
+        s.push_stack(StackObject { id: crate::ids::ObjectId(1), controller: PlayerId(0) });
+        s.push_stack(StackObject { id: crate::ids::ObjectId(2), controller: PlayerId(1) });
+        assert_eq!(s.stack_len(), 2);
+        // top is the last pushed (LIFO)
+        assert_eq!(s.peek_stack().unwrap().id, crate::ids::ObjectId(2));
+        // active player (P0) holds priority after a push
+        assert_eq!(s.priority_holder(), PlayerId(0));
     }
 }
 

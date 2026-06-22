@@ -9,6 +9,7 @@ pub mod layers;
 pub mod carddb;
 pub mod events;
 pub mod sba;
+pub mod priority;
 
 #[cfg(test)]
 mod smoke {
