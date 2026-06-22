@@ -5,6 +5,7 @@ pub mod ids;
 pub mod object;
 pub mod zones;
 pub mod state;
+pub mod layers;
 
 #[cfg(test)]
 mod smoke {
