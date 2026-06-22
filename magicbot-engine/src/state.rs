@@ -132,6 +132,45 @@ impl GameState {
         self.zones.contains(z, owner, id)
     }
 
+    /// CR 704.3 state-based-action loop (this slice: creature death only).
+    /// Performs all currently-applicable SBAs simultaneously as a batch, then
+    /// repeats until a pass finds none. Returns every MoveEvent produced.
+    /// Triggers/priority interleave and the rest of the 704.5 list are deferred.
+    pub fn check_state_based_actions(
+        &mut self,
+        db: &crate::carddb::CardDb,
+    ) -> Vec<crate::events::MoveEvent> {
+        let mut events = Vec::new();
+        loop {
+            // Gather one simultaneous batch of doomed creatures.
+            let mut doomed: Vec<ObjectId> = Vec::new();
+            for (id, obj) in self.objects.iter() {
+                if obj.zone() != crate::object::Zone::Battlefield {
+                    continue;
+                }
+                let marked = obj.marked_damage();
+                if let Some(chars) = self.characteristics(*id, db) {
+                    if crate::sba::creature_dies_to_sba(&chars, marked) {
+                        doomed.push(*id);
+                    }
+                }
+            }
+            if doomed.is_empty() {
+                break;
+            }
+            // Perform them (move to graveyard). move_object mints new ids; the
+            // doomed ids were gathered before any move, so no id is stale within
+            // this batch (each id still refers to its battlefield object until
+            // its own move).
+            for id in doomed {
+                if let Some(ev) = self.move_object(id, crate::object::Zone::Graveyard) {
+                    events.push(ev);
+                }
+            }
+        }
+        events
+    }
+
     /// Gather the static continuous effects that currently apply to `target`,
     /// scoped per their affected-set. This slice handles AnthemOtherCreatures:
     /// "other creatures you control get +X/+Y". CardDb is passed in.
@@ -193,6 +232,76 @@ impl GameState {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod sba_tests {
+    use super::*;
+    use crate::carddb::sample_pool;
+    use crate::events::dies;
+    use crate::ids::PlayerId;
+    use crate::object::{CounterKind, Zone};
+
+    #[test]
+    fn lethal_damage_kills_creature() {
+        let db = sample_pool();
+        let mut s = GameState::new(2, 0);
+        // Grizzly Bears (def 1) is 2/2.
+        let bears = s.create_object(PlayerId(0), Zone::Battlefield, 1);
+        s.get_mut(bears).unwrap().set_controller(Some(PlayerId(0)));
+        s.get_mut(bears).unwrap().mark_damage(2);
+
+        let events = s.check_state_based_actions(&db);
+        assert_eq!(events.len(), 1, "the bears died");
+        assert!(dies(&events[0]));
+        assert_eq!(s.battlefield_len(), 0, "battlefield is empty");
+    }
+
+    #[test]
+    fn minus_counters_to_zero_toughness_kills() {
+        let db = sample_pool();
+        let mut s = GameState::new(2, 0);
+        let bears = s.create_object(PlayerId(0), Zone::Battlefield, 1);
+        s.get_mut(bears).unwrap().set_controller(Some(PlayerId(0)));
+        // 2/2 with two -1/-1 counters -> 0/0 -> dies (704.5f).
+        s.get_mut(bears).unwrap().add_counter(CounterKind::MinusOneMinusOne, 2);
+
+        let events = s.check_state_based_actions(&db);
+        assert_eq!(events.len(), 1);
+        assert_eq!(s.battlefield_len(), 0);
+    }
+
+    #[test]
+    fn healthy_creatures_survive_and_loop_terminates() {
+        let db = sample_pool();
+        let mut s = GameState::new(2, 0);
+        let a = s.create_object(PlayerId(0), Zone::Battlefield, 1);
+        let b = s.create_object(PlayerId(0), Zone::Battlefield, 2); // Serra 4/4
+        s.get_mut(a).unwrap().set_controller(Some(PlayerId(0)));
+        s.get_mut(b).unwrap().set_controller(Some(PlayerId(0)));
+        // only 1 damage on the bears (2 toughness) -> survives
+        s.get_mut(a).unwrap().mark_damage(1);
+
+        let events = s.check_state_based_actions(&db);
+        assert!(events.is_empty(), "no deaths");
+        assert_eq!(s.battlefield_len(), 2);
+    }
+
+    #[test]
+    fn batch_kills_multiple_in_one_pass() {
+        let db = sample_pool();
+        let mut s = GameState::new(2, 0);
+        let a = s.create_object(PlayerId(0), Zone::Battlefield, 1); // 2/2
+        let b = s.create_object(PlayerId(0), Zone::Battlefield, 1); // 2/2
+        s.get_mut(a).unwrap().set_controller(Some(PlayerId(0)));
+        s.get_mut(b).unwrap().set_controller(Some(PlayerId(0)));
+        s.get_mut(a).unwrap().mark_damage(2);
+        s.get_mut(b).unwrap().mark_damage(5);
+
+        let events = s.check_state_based_actions(&db);
+        assert_eq!(events.len(), 2, "both died in the batch");
+        assert_eq!(s.battlefield_len(), 0);
     }
 }
 
